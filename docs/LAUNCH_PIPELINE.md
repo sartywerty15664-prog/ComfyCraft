@@ -7,18 +7,20 @@ Installation and launching are separate operations. A successful download is not
 1. Resolve the selected instance and read its official version metadata.
 2. Evaluate library OS, architecture and feature rules; include only applicable artifacts.
 3. Verify the client JAR, required library artifacts, asset index, asset objects and extracted Linux natives.
-4. Resolve Java and enforce the exact `javaVersion.majorVersion` from metadata.
-5. Expand the metadata's structured JVM and game argument arrays, including conditional entries and placeholders.
+4. Resolve Java and enforce the version required by the selected Minecraft metadata.
+5. Parse the structured JVM and game argument arrays, including conditional entries and placeholders.
 6. Supply game directory, assets directory/index, natives directory, launcher identity and authenticated profile values.
 7. Spawn Java using an argument vector, not a shell; stream output to the instance log and report its exit code.
 8. Do not launch until Ely.by authentication and profile/session data are available.
 
 ## Ely.by authentication requirements
 
-Use Ely.by OAuth 2.0 with `account_info minecraft_server_session offline_access`. Open the authorization page in the system browser, validate the returned `state`, exchange the authorization code, fetch the account profile and refresh credentials when needed. Store refresh credentials in the desktop OS credential store. Never write tokens to instance metadata, logs, source control or crash reports.
+The official Ely.by OAuth 2.0 flow uses the authorization endpoint `https://account.ely.by/oauth2/v1`, the callback parameters `code` and `state`, and the token endpoint `https://account.ely.by/api/oauth2/v1/token`. Request the scopes `account_info minecraft_server_session offline_access`. Validate `state`, exchange the code using the exact registered redirect URI, and obtain the account profile from `https://account.ely.by/api/account/v1/info`.
 
-The OAuth application must be registered by the project owner. Client credentials and the exact redirect URI are deployment configuration and must not be guessed or hard-coded. Password collection is out of scope.
+Important security constraint: Ely.by's documented authorization-code exchange requires a registered `client_secret`. A desktop binary is not a safe place to embed a client secret. Before implementing the exchange, the project needs an approved architecture for handling that secret (for example, a trusted server-side component) or confirmation from Ely.by of a supported public/native-client flow. Do not ship a guessed or exposed secret. The OAuth app and redirect URI must be registered by the project owner.
 
-## Current boundary
+Store refresh credentials in the desktop OS credential store. Never write tokens to instance metadata, logs, source control or crash reports. Password collection is out of scope.
 
-The installer downloads official Mojang metadata, client, libraries and assets. Runtime inspection and preflight checks exist. Full argument expansion, OAuth callback handling, secure credential storage and process supervision remain pending. The UI must not claim Play works until those stages are implemented and tested on Linux.
+## Current implementation boundary
+
+The installer downloads official Mojang metadata, client, libraries and assets. Runtime inspection and preflight checks exist. A metadata argument inspector now parses JVM/game argument entries and reports unresolved placeholders without launching Java. Actual argument completion, Ely.by callback/token handling, secure credential storage and Java process supervision remain pending. The UI must not claim Play works until those stages are implemented and tested on Linux.
