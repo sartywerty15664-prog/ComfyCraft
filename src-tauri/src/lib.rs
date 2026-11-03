@@ -524,14 +524,21 @@ fn inspect_launch_arguments(app: AppHandle, instance_id: String) -> Result<Value
     };
     let jvm = expand(jvm, &mut unresolved);
     let game = expand(game, &mut unresolved);
+    let required_java_major = metadata.get("javaVersion").and_then(|v| v.get("majorVersion"))
+        .and_then(Value::as_u64).unwrap_or(25);
+    let java = runtime.get("java").cloned().unwrap_or(Value::Null);
     Ok(serde_json::json!({
         "version": instance.game_version,
+        "requiredJavaMajor": required_java_major,
+        "javaRuntime": java,
         "jvmArgumentCount": jvm.len(),
         "gameArgumentCount": game.len(),
+        "jvmArguments": jvm,
+        "gameArguments": game,
         "unresolvedPlaceholders": unresolved,
         "authenticationRequired": true,
         "launchEnabled": false,
-        "note": "Argument metadata parsed for inspection only. Authentication and process supervision are not implemented."
+        "note": "Resolved argument vectors are available for validation. Authentication and process supervision are not implemented; do not launch yet."
     }))
 }
 
