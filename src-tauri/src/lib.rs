@@ -230,27 +230,88 @@ fn extract_native_archive(archive_path: &Path, destination: &Path) -> Result<usi
     Ok(extracted)
 }
 
-fn java_runtime() -> Value {
-    use std::process::Command;
-    let output = Command::new("java").arg("-version").output();
-    let Ok(output) = output else {
-        return serde_json::json!({"available": false, "executable": "java", "version": null});
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JavaRuntime {
+    executable: String,
+    version: String,
+    major: u32,
+    vendor: Option<String>,
+}
+
+fn parse_java_version(output: &str) -> Option<(String, u32)> {
+    let version = output.split('"').nth(1).or_else(|| {
+        output.split_whitespace().find(|part| part.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false))
+    })?;
+    let major_part = version.split('.').next()?;
+    let major = if major_part == "1" {
+        version.split('.').nth(1)?.split(['.', '_', '+']).next()?.parse::<u32>().ok()?
+    } else {
+        major_part.split(['.', '_', '+']).next()?.parse::<u32>().ok()?
     };
-    let text = format!("{}{}", String::from_utf8_lossy(&output.stderr), String::from_utf8_lossy(&output.stdout));
-    let quoted = text.split('"').nth(1).unwrap_or("");
-    let first = if quoted.is_empty() {
-        text.split_whitespace().find(|part| part.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)).unwrap_or("")
-    } else { quoted };
-    let major_text = first.split('.').next().unwrap_or("");
-    let major = major_text.parse::<u32>().ok().map(|n| if n == 1 {
-        first.split('.').nth(1).and_then(|v| v.parse::<u32>().ok()).unwrap_or(n)
-    } else { n });
-    serde_json::json!({
-        "available": output.status.success(),
-        "executable": "java",
-        "version": first,
-        "major": major
-    })
+    Some((version.to_string(), major))
+}
+
+fn java_candidate_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(home) = std::env::var_os("JAVA_HOME") {
+        paths.push(PathBuf::from(home).join("bin/java"));
+    }
+    if let Some(path_value) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path_value) {
+            paths.push(directory.join("java"));
+        }
+    }
+    for base in [Path::new("/usr/lib/jvm"), Path::new("/usr/java"), Path::new("/opt/java")] {
+        if let Ok(entries) = fs::read_dir(base) {
+            for entry in entries.flatten() {
+                let candidate = entry.path().join("bin/java");
+                paths.push(candidate);
+            }
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    paths.into_iter().filter_map(|path| {
+        if !path.is_file() { return None; }
+        let canonical = fs::canonicalize(&path).unwrap_or(path);
+        if seen.insert(canonical.clone()) { Some(canonical) } else { None }
+    }).collect()
+}
+
+fn detect_java_runtimes() -> Vec<JavaRuntime> {
+    use std::process::Command;
+    let mut runtimes = Vec::new();
+    for executable in java_candidate_paths() {
+        let Ok(output) = Command::new(&executable).arg("-version").output() else { continue; };
+        if !output.status.success() { continue; }
+        let text = format!("{}{}", String::from_utf8_lossy(&output.stderr), String::from_utf8_lossy(&output.stdout));
+        let Some((version, major)) = parse_java_version(&text) else { continue; };
+        let vendor = text.lines().next().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string);
+        runtimes.push(JavaRuntime {
+            executable: executable.to_string_lossy().into_owned(),
+            version,
+            major,
+            vendor,
+        });
+    }
+    runtimes.sort_by(|a, b| b.major.cmp(&a.major).then_with(|| a.executable.cmp(&b.executable)));
+    runtimes
+}
+
+fn java_runtime() -> Value {
+    let runtimes = detect_java_runtimes();
+    match runtimes.first() {
+        Some(runtime) => serde_json::to_value(runtime).map(|mut value| {
+            if let Some(object) = value.as_object_mut() { object.insert("available".into(), Value::Bool(true)); }
+            value
+        }).unwrap_or_else(|_| serde_json::json!({"available": false, "version": null})),
+        None => serde_json::json!({"available": false, "executable": null, "version": null, "major": null}),
+    }
+}
+
+#[tauri::command]
+fn list_java_runtimes() -> Vec<JavaRuntime> {
+    detect_java_runtimes()
 }
 
 #[tauri::command]
@@ -681,7 +742,7 @@ fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_app_info, list_game_versions, install_game, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
+            get_app_info, list_game_versions, list_java_runtimes, install_game, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
             list_instances, create_instance, rename_instance, delete_instance
         ])
         .run(tauri::generate_context!())
