@@ -11,7 +11,8 @@
 - [x] Persistent JSON metadata and validated instance identifiers
 
 ## Milestone 2 — game installation
-- [ ] Resolve official version manifest and per-version metadata
+- [x] Resolve official Mojang version manifest and list stable releases in the UI
+- [ ] Resolve per-version metadata
 - [ ] Download client, libraries, assets and logging configuration
 - [ ] Verify SHA-1 / available checksums and file sizes
 - [ ] Detect Java and validate the required runtime for each version
