@@ -9,7 +9,7 @@ type JavaRuntime = { executable: string; version: string; major: number; vendor?
 type InstallResult = { version: string; librariesDownloaded: number; assetsDownloaded: number; alreadyPresent: number };
 type Readiness = { ready: boolean; checks: { id: string; label: string; ok: boolean; detail?: unknown; count?: number }[]; authentication: string };
 type ModrinthMod = { projectId: string; slug: string; title: string; description: string; iconUrl?: string; downloads: number; author: string; latestVersion?: string };
-type InstalledMod = { projectId: string; versionId: string; name: string; filename: string; sha1: string };
+type InstalledMod = { projectId: string; versionId: string; name: string; filename: string; sha1: string; active: boolean };
 type ModUpdate = { projectId: string; currentVersionId: string; latestVersionId: string; latestName: string };
 type ContentType = "mod" | "resourcepack" | "shader";
 type LaunchInspection = { version: string; requiredJavaMajor: number; javaRuntime: { available: boolean; version?: string; major?: number }; jvmArgumentCount: number; gameArgumentCount: number; jvmArguments: string[]; gameArguments: string[]; unresolvedPlaceholders: string[]; authenticationRequired: boolean; launchEnabled: boolean; note: string };
@@ -128,6 +128,16 @@ function App() {
     try {
       if (contentType === "mod") { setInstalledMods(await invoke<InstalledMod[]>("install_modrinth_mod", { instanceId: selected.id, projectId })); await refreshModUpdates(selected.id); setNotice("Mod and required dependencies installed and verified."); }
       else { setInstalledContent(await invoke<InstalledMod[]>("install_modrinth_content", { instanceId: selected.id, projectId, contentType })); setNotice(contentType === "shader" ? "Shader pack installed and verified." : "Resource pack installed and verified."); }
+    } catch (e) { setError(String(e)); }
+    finally { setModBusy(""); }
+  }
+
+  async function toggleContent(projectId: string, enabled: boolean) {
+    if (!selected || modBusy) return;
+    setModBusy(projectId); setError(""); setNotice("");
+    try {
+      setInstalledContent(await invoke<InstalledMod[]>("set_modrinth_content_enabled", { instanceId: selected.id, projectId, contentType, enabled }));
+      setNotice(enabled ? "Content enabled. Minecraft may need a resource reload." : "Content disabled.");
     } catch (e) { setError(String(e)); }
     finally { setModBusy(""); }
   }
@@ -280,7 +290,7 @@ function App() {
           {contentType === "mod" ? <div className="installed-mods"><div className="section-kicker">INSTALLED MODS · {modUpdates.length} UPDATE{modUpdates.length === 1 ? "" : "S"} AVAILABLE</div>{installedMods.length === 0 ? <p className="muted">No managed mods installed yet.</p> : installedMods.map((item) => {
             const update = modUpdates.find((entry) => entry.projectId === item.projectId);
             return <div className="installed-mod-row" key={item.projectId}><span>{item.name}</span><small>{item.filename}</small>{update && <button className="text-action" disabled={Boolean(modBusy)} onClick={() => void installMod(item.projectId)}>{modBusy === item.projectId ? "Updating…" : "Update"}</button>}<button className="text-action" disabled={Boolean(modBusy)} onClick={() => void uninstallMod(item.projectId)}>Remove</button></div>;
-          })}</div> : <div className="installed-mods"><div className="section-kicker">INSTALLED {contentType === "shader" ? "SHADERS" : "RESOURCE PACKS"}</div>{installedContent.length === 0 ? <p className="muted">No managed content installed yet.</p> : installedContent.map((item) => <div className="installed-mod-row" key={item.projectId}><span>{item.name}</span><small>{item.filename}</small><button className="text-action" disabled={Boolean(modBusy)} onClick={() => void uninstallMod(item.projectId)}>Remove</button></div>)}</div>}
+          })}</div> : <div className="installed-mods"><div className="section-kicker">INSTALLED {contentType === "shader" ? "SHADERS" : "RESOURCE PACKS"}</div>{installedContent.length === 0 ? <p className="muted">No managed content installed yet.</p> : installedContent.map((item) => <div className="installed-mod-row" key={item.projectId}><span>{item.name}</span><small>{item.active ? "Enabled" : "Disabled"} · {item.filename}</small><button className="text-action" disabled={Boolean(modBusy)} onClick={() => void toggleContent(item.projectId, !item.active)}>{modBusy === item.projectId ? "Saving…" : item.active ? "Disable" : "Enable"}</button><button className="text-action" disabled={Boolean(modBusy)} onClick={() => void uninstallMod(item.projectId)}>Remove</button></div>)}</div>}
         </div>}
         {page === "Settings" && <div className="page"><div className="eyebrow">PREFERENCES</div><h2>Settings</h2><p>ComfyCraft is being designed for Linux desktops.</p><div className="settings-row"><div><b>Target platform</b><span>CachyOS / Arch Linux · Wayland / X11</span></div><strong>Linux only</strong></div><div className="settings-row"><div><b>Graphics testing</b><span>NVIDIA · KDE Plasma · Hyprland</span></div><strong>Planned</strong></div><div className="settings-row"><div><b>Account provider</b><span>Ely.by supported authentication flow</span></div><strong>Planned</strong></div><div className="settings-row"><div><b>Java Runtime</b><span>Detected runtimes · Java 25 recommended for Minecraft 26.3</span></div><button className="text-action" onClick={() => void refreshJavaRuntimes()} disabled={javaLoading}><RefreshCw size={14}/>{javaLoading ? "Scanning…" : "Rescan"}</button></div>{javaRuntimes.length === 0 ? <div className="empty-state"><Monitor size={25}/><h3>No Java runtime detected</h3><p>Install a Linux Java runtime, then rescan. ComfyCraft will not download runtimes from unverified sources.</p></div> : <div className="instance-list">{javaRuntimes.map((runtime) => <article className={runtime.selected ? "instance-row selected" : "instance-row"} key={runtime.executable}><div className="game-icon"><Monitor size={20}/></div><div className="instance-row-info"><b>Java {runtime.major} · {runtime.version}</b><span>{runtime.vendor ?? "Java runtime"} · {runtime.executable}</span></div><strong>{runtime.selected ? "Selected" : runtime.major >= 25 ? "Compatible with 26.3" : "Older runtime"}</strong>{!runtime.selected && <button className="text-action" onClick={async () => { try { setJavaRuntimes(await invoke<JavaRuntime[]>("select_java_runtime", { executable: runtime.executable })); setNotice("Java runtime selection saved."); } catch (e) { setError(String(e)); } }}>Use this</button>}</article>)}</div>}</div>}
       </section>

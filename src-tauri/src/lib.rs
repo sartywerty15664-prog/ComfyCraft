@@ -42,6 +42,8 @@ struct ManifestVersion {
     version_type: String,
     url: String,
     sha1: String,
+    #[serde(skip)]
+    active: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1015,6 +1017,7 @@ async fn install_modrinth_mod(app: AppHandle, instance_id: String, project_id: S
         staged.push((temp, target, InstalledModEntry {
             project_id: project, version_id: version, name, filename,
             sha1: format!("{:x}", Sha1::digest(&bytes)),
+            active: false,
         }));
     }
     for (temp, target, entry) in staged {
@@ -1164,8 +1167,88 @@ async fn search_modrinth_content(app: AppHandle, instance_id: String, query: Str
 fn list_installed_content(app: AppHandle, instance_id: String, content_type: String) -> Result<Vec<InstalledModEntry>, String> {
     let root = instances_dir(&app)?;
     let _instance = read_instance(&root, &instance_id)?;
-    let (_, manifest) = content_manifest_name(&content_type)?;
-    read_content_manifest(&root.join(instance_id), manifest)
+    let (folder, manifest) = content_manifest_name(&content_type)?;
+    let instance_dir = root.join(instance_id);
+    let options = fs::read_to_string(instance_dir.join("options.txt")).unwrap_or_default();
+    let mut entries = read_content_manifest(&instance_dir, manifest)?;
+    let active_packs: Vec<String> = options.lines().find_map(|line| line.strip_prefix("resourcePacks:"))
+        .and_then(|value| serde_json::from_str(value).ok()).unwrap_or_default();
+    let active_shader = options.lines().find_map(|line| line.strip_prefix("shaderPack=")).unwrap_or("");
+    for entry in &mut entries {
+        let _ = folder;
+        entry.active = if content_type == "resourcepack" {
+            active_packs.contains(&format!("file/{}", entry.filename))
+        } else {
+            active_shader == entry.filename
+        };
+    }
+    Ok(entries)
+}
+
+fn write_options_values(instance_dir: &Path, updates: &[(&str, String)]) -> Result<(), String> {
+    let path = instance_dir.join("options.txt");
+    let current = fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> = current.lines().map(str::to_string).collect();
+    for (key, value) in updates {
+        let prefix = format!("{key}:");
+        let equals = format!("{key}=");
+        let replacement = if key == &"resourcePacks" { format!("{prefix}{value}") } else { format!("{equals}{value}") };
+        if let Some(index) = lines.iter().position(|line| line.starts_with(&prefix) || line.starts_with(&equals)) {
+            lines[index] = replacement;
+        } else {
+            lines.push(replacement);
+        }
+    }
+    let temp = instance_dir.join("options.txt.comfycraft.tmp");
+    let mut data = lines.join("\n");
+    data.push('\n');
+    fs::write(&temp, data).map_err(|e| format!("Cannot stage Minecraft options: {e}"))?;
+    fs::rename(temp, path).map_err(|e| format!("Cannot save Minecraft options: {e}"))
+}
+
+#[tauri::command]
+fn set_modrinth_content_enabled(app: AppHandle, instance_id: String, project_id: String, content_type: String, enabled: bool) -> Result<Vec<InstalledModEntry>, String> {
+    if !valid_modrinth_project_id(&project_id) { return Err("Invalid Modrinth project identifier.".into()); }
+    let root = instances_dir(&app)?;
+    let _instance = read_instance(&root, &instance_id)?;
+    let (folder, manifest) = content_manifest_name(&content_type)?;
+    let instance_dir = root.join(&instance_id);
+    let mut entries = read_content_manifest(&instance_dir, manifest)?;
+    let entry = entries.iter().find(|item| item.project_id == project_id).cloned()
+        .ok_or("This content is not managed by ComfyCraft.")?;
+    let file_path = instance_dir.join(folder).join(safe_content_filename(&entry.filename)?);
+    let bytes = fs::read(&file_path).map_err(|e| format!("Cannot verify content file: {e}"))?;
+    if !sha1_matches(&bytes, &entry.sha1) { return Err("Content file integrity check failed; activation was not changed.".into()); }
+    let options = fs::read_to_string(instance_dir.join("options.txt")).unwrap_or_default();
+    if content_type == "resourcepack" {
+        let mut packs: Vec<String> = options.lines().find_map(|line| line.strip_prefix("resourcePacks:"))
+            .and_then(|value| serde_json::from_str(value).ok()).unwrap_or_else(|| vec!["vanilla".into()]);
+        let pack_id = format!("file/{}", entry.filename);
+        packs.retain(|item| item != &pack_id);
+        if enabled { packs.push(pack_id); }
+        let encoded = serde_json::to_string(&packs).map_err(|e| e.to_string())?;
+        write_options_values(&instance_dir, &[("resourcePacks", encoded)])?;
+    } else {
+        if enabled {
+            let installed_mods = read_installed_mods(&instance_dir)?;
+            if !installed_mods.iter().any(|item| item.project_id == "YL57xq9U") {
+                return Err("Install Iris for this Fabric instance before enabling shader packs.".into());
+            }
+        }
+        let current = options.lines().find_map(|line| line.strip_prefix("shaderPack=")).unwrap_or("");
+        let next = if enabled { entry.filename.as_str() } else if current == entry.filename { "" } else { current };
+        write_options_values(&instance_dir, &[("shaderPack", next.to_string())])?;
+    }
+    let mut updated = read_content_manifest(&instance_dir, manifest)?;
+    let active_packs: Vec<String> = fs::read_to_string(instance_dir.join("options.txt")).unwrap_or_default().lines()
+        .find_map(|line| line.strip_prefix("resourcePacks:")).and_then(|value| serde_json::from_str(value).ok()).unwrap_or_default();
+    let active_shader = fs::read_to_string(instance_dir.join("options.txt")).unwrap_or_default().lines()
+        .find_map(|line| line.strip_prefix("shaderPack=")).unwrap_or("").to_string();
+    for item in &mut updated {
+        item.active = if content_type == "resourcepack" { active_packs.contains(&format!("file/{}", item.filename)) }
+            else { active_shader == item.filename };
+    }
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -1212,7 +1295,7 @@ async fn install_modrinth_content(app: AppHandle, instance_id: String, project_i
     entries.push(InstalledModEntry {
         project_id, version_id,
         name: version.get("name").and_then(Value::as_str).unwrap_or("Installed content").to_string(),
-        filename, sha1: format!("{:x}", Sha1::digest(&bytes)),
+        filename, sha1: format!("{:x}", Sha1::digest(&bytes)), active: false,
     });
     write_content_manifest(&instance_dir, manifest, &entries)?;
     Ok(entries)
@@ -1305,7 +1388,7 @@ fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_app_info, list_game_versions, list_java_runtimes, select_java_runtime, install_game, install_fabric, search_modrinth_mods, install_modrinth_mod, list_installed_mods, uninstall_modrinth_mod, check_mod_updates, search_modrinth_content, list_installed_content, install_modrinth_content, uninstall_modrinth_content, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
+            get_app_info, list_game_versions, list_java_runtimes, select_java_runtime, install_game, install_fabric, search_modrinth_mods, install_modrinth_mod, list_installed_mods, uninstall_modrinth_mod, check_mod_updates, search_modrinth_content, list_installed_content, install_modrinth_content, uninstall_modrinth_content, set_modrinth_content_enabled, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
             list_instances, create_instance, rename_instance, delete_instance
         ])
         .run(tauri::generate_context!())
