@@ -12,9 +12,14 @@
 
 ## Milestone 2 — game installation
 - [x] Resolve official Mojang version manifest and list stable releases in the UI
-- [ ] Resolve per-version metadata
-- [ ] Download client, libraries, assets and logging configuration
-- [ ] Verify SHA-1 / available checksums and file sizes
+- [x] Resolve and SHA-1 verify per-version metadata
+- [x] Download the official client JAR
+- [x] Download Linux library artifacts and native archives
+- [x] Download asset index and all referenced asset objects
+- [x] Verify declared SHA-1 hashes and file sizes; reuse valid cached files
+- [x] Persist an installation marker per instance
+- [ ] Extract native archives and build the runtime classpath
+- [ ] Download/validate logging configuration and complete installer smoke tests
 - [ ] Detect Java and validate the required runtime for each version
 
 ## Milestone 3 — modded gameplay
