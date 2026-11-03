@@ -62,3 +62,9 @@
 .installed-mod-row small { color:var(--muted); }
 .compact-empty { margin-top:12px; padding:28px; }
 @media (max-width: 700px) { .mod-row { align-items:flex-start; flex-wrap:wrap; } .mod-info { flex-basis:calc(100% - 64px); } .mod-row > button { margin-left:62px; } .installed-mod-row { flex-wrap:wrap; } .installed-mod-row small { width:100%; order:3; } }
+
+
+.content-tabs { display:flex; gap:8px; margin:22px 0 4px; border-bottom:1px solid var(--border); }
+.content-tab { border:0; border-bottom:2px solid transparent; background:transparent; color:var(--muted); padding:10px 14px; font:inherit; font-size:13px; cursor:pointer; }
+.content-tab:hover { color:var(--text); }
+.content-tab.active { color:var(--text); border-bottom-color:var(--accent); }
