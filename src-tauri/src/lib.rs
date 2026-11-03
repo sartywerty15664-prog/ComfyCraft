@@ -60,8 +60,9 @@ fn create_instance(app: AppHandle, name: String, game_version: String) -> Result
     if name.is_empty() || name.chars().count() > 40 { return Err("Name must contain 1–40 characters".into()); }
     if game_version.trim().is_empty() || game_version.len() > 32 { return Err("Invalid Minecraft version".into()); }
     let dir = instances_dir(&app)?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
-    let id = format!("instance-{now}-{}", std::process::id());
+    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?;
+    let now = elapsed.as_secs();
+    let id = format!("instance-{}-{}", elapsed.as_nanos(), std::process::id());
     let instance_dir = dir.join(&id);
     fs::create_dir(&instance_dir).map_err(|e| format!("Cannot create instance: {e}"))?;
     for child in ["mods", "resourcepacks", "shaderpacks", "saves", "logs"] {
