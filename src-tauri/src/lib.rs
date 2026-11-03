@@ -145,7 +145,17 @@ async fn download_many(client: &reqwest::Client, tasks: Vec<DownloadTask>) -> Re
     Ok((fresh, total.saturating_sub(fresh)))
 }
 
-fn rule_allows(library: &Value) -> bool {
+fn linux_arch_matches(requested: &str) -> bool {
+    match requested {
+        "x86_64" => std::env::consts::ARCH == "x86_64",
+        "x86" => std::env::consts::ARCH == "x86",
+        "aarch64" => std::env::consts::ARCH == "aarch64",
+        "arm" => std::env::consts::ARCH.starts_with("arm"),
+        other => other == std::env::consts::ARCH,
+    }
+}
+
+fn rule_allows_with_features(library: &Value, features_enabled: &Value) -> bool {
     let Some(rules) = library.get("rules").and_then(Value::as_array) else { return true; };
     let mut allowed = false;
     for rule in rules {
@@ -153,16 +163,10 @@ fn rule_allows(library: &Value) -> bool {
         let name_matches = os.and_then(|v| v.get("name")).and_then(Value::as_str)
             .map(|name| name == std::env::consts::OS).unwrap_or(true);
         let arch_matches = os.and_then(|v| v.get("arch")).and_then(Value::as_str)
-            .map(|arch| arch == std::env::consts::ARCH).unwrap_or(true);
-        let features_match = rule.get("features").and_then(Value::as_object).map(|features| {
-            features.iter().all(|(key, value)| {
-                let enabled = match key.as_str() {
-                    "has_custom_resolution" | "is_demo_user" | "has_quick_plays_support" |
-                    "is_quick_play_singleplayer" | "is_quick_play_multiplayer" |
-                    "is_quick_play_realms" => false,
-                    _ => false,
-                };
-                value.as_bool() == Some(enabled)
+            .map(linux_arch_matches).unwrap_or(true);
+        let features_match = rule.get("features").and_then(Value::as_object).map(|required| {
+            required.iter().all(|(key, expected)| {
+                features_enabled.get(key).and_then(Value::as_bool) == expected.as_bool()
             })
         }).unwrap_or(true);
         if name_matches && arch_matches && features_match {
@@ -174,6 +178,18 @@ fn rule_allows(library: &Value) -> bool {
         }
     }
     allowed
+}
+
+fn rule_allows(library: &Value) -> bool {
+    // Interactive launcher-only flags remain disabled until their UI and argument values exist.
+    rule_allows_with_features(library, &serde_json::json!({
+        "has_custom_resolution": false,
+        "is_demo_user": false,
+        "has_quick_plays_support": false,
+        "is_quick_play_singleplayer": false,
+        "is_quick_play_multiplayer": false,
+        "is_quick_play_realms": false
+    }))
 }
 
 fn artifact_task(base: &Path, artifact: &Value) -> Result<DownloadTask, String> {
@@ -670,4 +686,41 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running ComfyCraft");
+}
+
+
+#[cfg(test)]
+mod launch_rule_tests {
+    use super::*;
+
+    #[test]
+    fn libraries_without_rules_are_allowed() {
+        assert!(rule_allows(&serde_json::json!({"name":"example"})));
+    }
+
+    #[test]
+    fn rules_apply_in_order() {
+        let library = serde_json::json!({"rules":[
+            {"action":"allow"},
+            {"action":"disallow","os":{"name":"linux"}}
+        ]});
+        assert!(!rule_allows(&library));
+    }
+
+    #[test]
+    fn feature_requirements_use_explicit_launcher_values() {
+        let library = serde_json::json!({"rules":[
+            {"action":"allow","features":{"has_custom_resolution":false}},
+            {"action":"disallow","features":{"is_demo_user":true}}
+        ]});
+        assert!(rule_allows(&library));
+    }
+
+    #[test]
+    fn unsupported_feature_keys_do_not_accidentally_match() {
+        let library = serde_json::json!({"rules":[
+            {"action":"allow","features":{"future_launcher_feature":true}}
+        ]});
+        assert!(!rule_allows(&library));
+    }
 }
