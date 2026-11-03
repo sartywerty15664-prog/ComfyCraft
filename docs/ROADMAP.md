@@ -23,6 +23,7 @@
 - [x] Detect Java runtimes from JAVA_HOME, PATH and common Linux JVM directories
 - [x] Parse modern and legacy Java version strings with unit tests
 - [x] Show detected runtimes and Java 25 compatibility in Settings
+- [x] Select and persist the Java executable used by runtime diagnostics
 
 ## Milestone 3 — modded gameplay
 - [ ] Fabric loader installation
