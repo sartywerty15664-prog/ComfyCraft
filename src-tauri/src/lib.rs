@@ -846,7 +846,13 @@ struct ModrinthMod {
 
 fn modrinth_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder().user_agent("ComfyCraft/0.1.0 (https://github.com/sartywerty15664-prog/ComfyCraft)")
+        .connect_timeout(std::time::Duration::from_secs(12))
+        .timeout(std::time::Duration::from_secs(90))
         .build().map_err(|e| format!("Cannot initialize Modrinth client: {e}"))
+}
+
+fn valid_modrinth_project_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 #[tauri::command]
@@ -942,6 +948,7 @@ async fn modrinth_compatible_version(client: &reqwest::Client, project_id: &str,
 
 #[tauri::command]
 async fn install_modrinth_mod(app: AppHandle, instance_id: String, project_id: String) -> Result<Vec<InstalledModEntry>, String> {
+    if !valid_modrinth_project_id(&project_id) { return Err("Invalid Modrinth project identifier.".into()); }
     let root = instances_dir(&app)?;
     let instance = read_instance(&root, &instance_id)?;
     if !instance.loader.starts_with("Fabric ") {
@@ -1163,6 +1170,7 @@ fn list_installed_content(app: AppHandle, instance_id: String, content_type: Str
 
 #[tauri::command]
 async fn install_modrinth_content(app: AppHandle, instance_id: String, project_id: String, content_type: String) -> Result<Vec<InstalledModEntry>, String> {
+    if !valid_modrinth_project_id(&project_id) { return Err("Invalid Modrinth project identifier.".into()); }
     let root = instances_dir(&app)?;
     let instance = read_instance(&root, &instance_id)?;
     let (folder, manifest) = content_manifest_name(&content_type)?;
@@ -1354,5 +1362,27 @@ mod launch_rule_tests {
             {"action":"allow","features":{"future_launcher_feature":true}}
         ]});
         assert!(!rule_allows(&library));
+    }
+
+    #[test]
+    fn modrinth_project_ids_are_path_safe() {
+        assert!(valid_modrinth_project_id("AANobbMI"));
+        assert!(!valid_modrinth_project_id("../AANobbMI"));
+        assert!(!valid_modrinth_project_id("bad/id"));
+        assert!(!valid_modrinth_project_id("")); 
+    }
+
+    #[test]
+    fn content_types_are_allowlisted() {
+        assert_eq!(content_manifest_name("resourcepack").unwrap().0, "resourcepacks");
+        assert_eq!(content_manifest_name("shader").unwrap().0, "shaderpacks");
+        assert!(content_manifest_name("mods").is_err());
+    }
+
+    #[test]
+    fn content_filenames_reject_traversal_and_non_zip_files() {
+        assert_eq!(safe_content_filename("pack.zip").unwrap(), "pack.zip");
+        assert!(safe_content_filename("../pack.zip").is_err());
+        assert!(safe_content_filename("pack.jar").is_err());
     }
 }
