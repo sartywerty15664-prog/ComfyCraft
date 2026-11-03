@@ -237,6 +237,7 @@ struct JavaRuntime {
     version: String,
     major: u32,
     vendor: Option<String>,
+    selected: bool,
 }
 
 fn parse_java_version(output: &str) -> Option<(String, u32)> {
@@ -292,15 +293,42 @@ fn detect_java_runtimes() -> Vec<JavaRuntime> {
             version,
             major,
             vendor,
+            selected: false,
         });
     }
     runtimes.sort_by(|a, b| b.major.cmp(&a.major).then_with(|| a.executable.cmp(&b.executable)));
     runtimes
 }
 
-fn java_runtime() -> Value {
-    let runtimes = detect_java_runtimes();
-    match runtimes.first() {
+fn selected_java_file(app: &AppHandle) -> Result<PathBuf, String> {
+    let mut path = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    path.push("selected-java.json");
+    Ok(path)
+}
+
+fn selected_java_path(app: &AppHandle) -> Option<PathBuf> {
+    let path = selected_java_file(app).ok()?;
+    let content = fs::read_to_string(path).ok()?;
+    let value: Value = serde_json::from_str(&content).ok()?;
+    value.get("executable").and_then(Value::as_str).map(PathBuf::from)
+}
+
+fn java_runtimes_for_app(app: &AppHandle) -> Vec<JavaRuntime> {
+    let selected = selected_java_path(app).and_then(|path| fs::canonicalize(path).ok());
+    let mut runtimes = detect_java_runtimes();
+    for runtime in &mut runtimes {
+        runtime.selected = selected.as_ref().map(|path| path == Path::new(&runtime.executable)).unwrap_or(false);
+    }
+    if !runtimes.iter().any(|runtime| runtime.selected) {
+        if let Some(first) = runtimes.first_mut() { first.selected = true; }
+    }
+    runtimes
+}
+
+fn java_runtime(app: &AppHandle) -> Value {
+    let runtimes = java_runtimes_for_app(app);
+    match runtimes.iter().find(|runtime| runtime.selected) {
         Some(runtime) => serde_json::to_value(runtime).map(|mut value| {
             if let Some(object) = value.as_object_mut() { object.insert("available".into(), Value::Bool(true)); }
             value
@@ -310,8 +338,22 @@ fn java_runtime() -> Value {
 }
 
 #[tauri::command]
-fn list_java_runtimes() -> Vec<JavaRuntime> {
-    detect_java_runtimes()
+fn list_java_runtimes(app: AppHandle) -> Vec<JavaRuntime> {
+    java_runtimes_for_app(&app)
+}
+
+#[tauri::command]
+fn select_java_runtime(app: AppHandle, executable: String) -> Result<Vec<JavaRuntime>, String> {
+    let candidate = fs::canonicalize(&executable).map_err(|e| format!("Cannot resolve Java executable: {e}"))?;
+    let valid = detect_java_runtimes().iter().any(|runtime| Path::new(&runtime.executable) == candidate);
+    if !valid { return Err("Selected Java executable is not a detected, valid runtime".into()); }
+    let path = selected_java_file(&app)?;
+    let temporary = path.with_extension("json.tmp");
+    let data = serde_json::to_vec_pretty(&serde_json::json!({"executable": candidate}))
+        .map_err(|e| e.to_string())?;
+    fs::write(&temporary, data).map_err(|e| format!("Cannot save Java selection: {e}"))?;
+    fs::rename(&temporary, &path).map_err(|e| format!("Cannot finalize Java selection: {e}"))?;
+    Ok(java_runtimes_for_app(&app))
 }
 
 #[tauri::command]
@@ -509,7 +551,7 @@ fn get_runtime_info(app: AppHandle, instance_id: String) -> Result<Value, String
     classpath.push(client_jar.to_string_lossy().into_owned());
     Ok(serde_json::json!({
         "version": instance.game_version,
-        "java": java_runtime(),
+        "java": java_runtime(&app),
         "classpath": classpath.join(":"),
         "classpathEntries": classpath.len(),
         "nativesDirectory": game_dir.join("natives"),
@@ -634,7 +676,7 @@ fn check_launch_readiness(app: AppHandle, instance_id: String) -> Result<Value, 
     let metadata: Value = serde_json::from_slice(&fs::read(&metadata_path)
         .map_err(|e| format!("Minecraft metadata is missing: {e}"))?)
         .map_err(|e| format!("Minecraft metadata is invalid: {e}"))?;
-    let java = java_runtime();
+    let java = java_runtime(&app);
     let required_java = metadata.get("javaVersion").and_then(|v| v.get("majorVersion"))
         .and_then(Value::as_u64).unwrap_or(25);
     let java_major = java.get("major").and_then(Value::as_u64);
@@ -742,7 +784,7 @@ fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_app_info, list_game_versions, list_java_runtimes, install_game, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
+            get_app_info, list_game_versions, list_java_runtimes, select_java_runtime, install_game, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
             list_instances, create_instance, rename_instance, delete_instance
         ])
         .run(tauri::generate_context!())
