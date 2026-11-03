@@ -521,6 +521,118 @@ async fn install_game(app: AppHandle, instance_id: String) -> Result<InstallResu
     })
 }
 
+
+fn maven_artifact_task(game_dir: &Path, library: &Value) -> Result<DownloadTask, String> {
+    if let Some(artifact) = library.get("downloads").and_then(|v| v.get("artifact")) {
+        return artifact_task(game_dir, artifact);
+    }
+    let coordinate = library.get("name").and_then(Value::as_str).ok_or("Fabric library is missing its Maven coordinate")?;
+    let (coordinate, extension) = coordinate.split_once('@').unwrap_or((coordinate, "jar"));
+    let parts: Vec<&str> = coordinate.split(':').collect();
+    if parts.len() < 3 || parts.len() > 4 || !["jar", "zip"].contains(&extension) {
+        return Err(format!("Unsupported Fabric library coordinate: {coordinate}"));
+    }
+    let group = parts[0].replace('.', "/");
+    let artifact = parts[1];
+    let version = parts[2];
+    let classifier = parts.get(3).map(|v| format!("-{v}")).unwrap_or_default();
+    if [parts[0], artifact, version].iter().any(|part| part.is_empty() || part.contains('/') || part.contains('\\\\')) {
+        return Err(format!("Unsafe Fabric library coordinate: {coordinate}"));
+    }
+    let relative = format!("{group}/{artifact}/{version}/{artifact}-{version}{classifier}.{extension}");
+    let path = game_dir.join("libraries").join(safe_relative_path(&relative)?);
+    let base = library.get("url").and_then(Value::as_str).unwrap_or("https://maven.fabricmc.net/");
+    if !base.starts_with("https://") { return Err("Fabric library repository must use HTTPS".into()); }
+    let url = format!("{}{}", base.trim_end_matches('/'), format!("/{relative}"));
+    Ok(DownloadTask { url, path, sha1: None, size: None })
+}
+
+#[tauri::command]
+async fn install_fabric(app: AppHandle, instance_id: String) -> Result<Value, String> {
+    let root = instances_dir(&app)?;
+    let mut instance = read_instance(&root, &instance_id)?;
+    let game_dir = root.join(&instance_id).join("game");
+    let version_dir = game_dir.join("versions").join(&instance.game_version);
+    let metadata_path = version_dir.join(format!("{}.json", instance.game_version));
+    if !metadata_path.is_file() {
+        return Err("Install Minecraft first, then add Fabric.".into());
+    }
+    let marker_path = root.join(&instance_id).join("installation.json");
+    if !marker_path.is_file() { return Err("Minecraft installation marker is missing; repair the game first.".into()); }
+
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).build().map_err(|e| e.to_string())?;
+    let versions_url = format!("https://meta.fabricmc.net/v2/versions/loader/{}", instance.game_version);
+    let available: Vec<Value> = client.get(&versions_url).send().await
+        .map_err(|e| format!("Cannot query Fabric versions: {e}"))?
+        .error_for_status().map_err(|e| format!("Fabric version query failed: {e}"))?
+        .json().await.map_err(|e| format!("Cannot parse Fabric versions: {e}"))?;
+    let selected = available.iter().find(|item| item.get("loader").and_then(|v| v.get("stable")).and_then(Value::as_bool) == Some(true))
+        .or_else(|| available.first()).ok_or_else(|| format!("Fabric does not currently support Minecraft {}", instance.game_version))?;
+    let loader_version = selected.get("loader").and_then(|v| v.get("version")).and_then(Value::as_str)
+        .ok_or("Fabric response did not include a loader version")?;
+    let profile_url = format!("https://meta.fabricmc.net/v2/versions/loader/{}/{}/profile/json", instance.game_version, loader_version);
+    let profile: Value = client.get(&profile_url).send().await
+        .map_err(|e| format!("Cannot download Fabric profile: {e}"))?
+        .error_for_status().map_err(|e| format!("Fabric profile request failed: {e}"))?
+        .json().await.map_err(|e| format!("Cannot parse Fabric profile: {e}"))?;
+
+    let mut metadata: Value = serde_json::from_slice(&fs::read(&metadata_path).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Cannot parse installed Minecraft metadata: {e}"))?;
+    let main_class = profile.get("mainClass").and_then(Value::as_str)
+        .ok_or("Fabric profile is missing its client main class")?;
+    metadata["mainClass"] = Value::String(main_class.to_string());
+
+    let mut libraries = metadata.get("libraries").and_then(Value::as_array).cloned().unwrap_or_default();
+    let fabric_libraries = profile.get("libraries").and_then(Value::as_array)
+        .ok_or("Fabric profile does not contain a libraries list")?;
+    let mut tasks = Vec::new();
+    for library in fabric_libraries {
+        let name = library.get("name").and_then(Value::as_str).ok_or("Fabric library has no name")?;
+        if !libraries.iter().any(|existing| existing.get("name").and_then(Value::as_str) == Some(name)) {
+            libraries.push(library.clone());
+        }
+        if rule_allows(library) { tasks.push(maven_artifact_task(&game_dir, library)?); }
+    }
+    let (downloaded, existing) = download_many(&client, tasks).await?;
+    metadata["libraries"] = Value::Array(libraries);
+
+    if let Some(profile_args) = profile.get("arguments").and_then(Value::as_object) {
+        for key in ["jvm", "game"] {
+            if let Some(extra) = profile_args.get(key).and_then(Value::as_array) {
+                let target = metadata["arguments"][key].as_array_mut();
+                if let Some(target) = target { target.extend(extra.iter().cloned()); }
+                else { metadata["arguments"][key] = Value::Array(extra.clone()); }
+            }
+        }
+    }
+    let serialized = serde_json::to_vec_pretty(&metadata).map_err(|e| e.to_string())?;
+    let temporary = metadata_path.with_extension("json.tmp");
+    fs::write(&temporary, serialized).map_err(|e| format!("Cannot stage Fabric metadata: {e}"))?;
+    fs::rename(&temporary, &metadata_path).map_err(|e| format!("Cannot activate Fabric metadata: {e}"))?;
+
+    instance.loader = format!("Fabric {loader_version}");
+    let instance_path = root.join(&instance_id).join("instance.json");
+    let instance_temp = instance_path.with_extension("json.tmp");
+    fs::write(&instance_temp, serde_json::to_vec_pretty(&instance).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Cannot save Fabric instance metadata: {e}"))?;
+    fs::rename(&instance_temp, &instance_path).map_err(|e| format!("Cannot finalize Fabric instance metadata: {e}"))?;
+
+    let mut marker: Value = serde_json::from_slice(&fs::read(&marker_path).map_err(|e| e.to_string())?)
+        .unwrap_or_else(|_| serde_json::json!({}));
+    marker["loader"] = Value::String(instance.loader.clone());
+    fs::write(&marker_path, serde_json::to_vec_pretty(&marker).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Cannot update installation marker: {e}"))?;
+
+    Ok(serde_json::json!({
+        "minecraftVersion": instance.game_version,
+        "loader": instance.loader,
+        "librariesDownloaded": downloaded,
+        "librariesAlreadyPresent": existing,
+        "status": "installed"
+    }))
+}
+
+
 #[tauri::command]
 fn get_runtime_info(app: AppHandle, instance_id: String) -> Result<Value, String> {
     let root = instances_dir(&app)?;
@@ -784,7 +896,7 @@ fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_app_info, list_game_versions, list_java_runtimes, select_java_runtime, install_game, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
+            get_app_info, list_game_versions, list_java_runtimes, select_java_runtime, install_game, install_fabric, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
             list_instances, create_instance, rename_instance, delete_instance
         ])
         .run(tauri::generate_context!())
