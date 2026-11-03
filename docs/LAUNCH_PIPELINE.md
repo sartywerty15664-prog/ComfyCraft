@@ -29,3 +29,8 @@ The installer downloads official Mojang metadata, client, libraries and assets. 
 ## Metadata rule evaluation
 
 Linux library and argument rules are evaluated in their declared order, including OS name, architecture, and feature predicates. Launcher-only feature flags are explicitly false until their corresponding settings and values are implemented; unknown feature keys do not silently pass. Unit tests cover rule ordering, default behavior, and feature matching.
+
+
+## Java runtime discovery
+
+The Linux runtime manager checks `JAVA_HOME/bin/java`, Java executables available through `PATH`, and common JVM locations under `/usr/lib/jvm`, `/usr/java` and `/opt/java`. Candidate binaries are canonicalized and deduplicated, then queried with `java -version`. Both modern version strings (for example, 25.0.1) and legacy 1.x strings are parsed. Settings lists detected runtimes and marks Java 25+ as compatible with the current 26.3 target. ComfyCraft does not silently download a runtime or execute an installer.
