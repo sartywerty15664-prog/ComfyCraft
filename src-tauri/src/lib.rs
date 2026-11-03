@@ -430,6 +430,47 @@ fn get_runtime_info(app: AppHandle, instance_id: String) -> Result<Value, String
 }
 
 #[tauri::command]
+fn check_launch_readiness(app: AppHandle, instance_id: String) -> Result<Value, String> {
+    let root = instances_dir(&app)?;
+    let instance = read_instance(&root, &instance_id)?;
+    let game_dir = root.join(&instance_id).join("game");
+    let version_dir = game_dir.join("versions").join(&instance.game_version);
+    let metadata_path = version_dir.join(format!("{}.json", instance.game_version));
+    let metadata: Value = serde_json::from_slice(&fs::read(&metadata_path)
+        .map_err(|e| format!("Minecraft metadata is missing: {e}"))?)
+        .map_err(|e| format!("Minecraft metadata is invalid: {e}"))?;
+    let java = java_runtime();
+    let required_java = metadata.get("javaVersion").and_then(|v| v.get("majorVersion"))
+        .and_then(Value::as_u64).unwrap_or(25);
+    let java_major = java.get("major").and_then(Value::as_u64);
+    let java_ok = java.get("available").and_then(Value::as_bool) == Some(true)
+        && java_major.map(|major| major >= required_java).unwrap_or(false);
+    let client_ok = version_dir.join(format!("{}.jar", instance.game_version)).is_file();
+    let natives_ok = game_dir.join("natives").is_dir();
+    let assets_ok = game_dir.join("assets").join("indexes").is_dir()
+        && metadata.get("assetIndex").and_then(|v| v.get("id")).and_then(Value::as_str)
+            .map(|id| game_dir.join("assets").join("indexes").join(format!("{id}.json")).is_file())
+            .unwrap_or(false);
+    let classpath_count = metadata.get("libraries").and_then(Value::as_array).map(|libraries| {
+        libraries.iter().filter(|library| rule_allows(library)).filter(|library| {
+            library.get("downloads").and_then(|v| v.get("artifact"))
+                .and_then(|v| v.get("path")).and_then(Value::as_str)
+                .and_then(|path| safe_relative_path(path).ok())
+                .map(|path| game_dir.join("libraries").join(path).is_file()).unwrap_or(false)
+        }).count()
+    }).unwrap_or(0);
+    let checks = vec![
+        serde_json::json!({"id":"java","label":format!("Java {required_java} or newer"),"ok":java_ok,"detail":java.get("version").cloned().unwrap_or(Value::Null)}),
+        serde_json::json!({"id":"client","label":"Minecraft client","ok":client_ok}),
+        serde_json::json!({"id":"natives","label":"Linux native libraries","ok":natives_ok}),
+        serde_json::json!({"id":"assets","label":"Game assets","ok":assets_ok}),
+        serde_json::json!({"id":"libraries","label":"Runtime libraries","ok":classpath_count > 0,"count":classpath_count})
+    ];
+    let ready = checks.iter().all(|check| check.get("ok").and_then(Value::as_bool) == Some(true));
+    Ok(serde_json::json!({"ready":ready,"checks":checks,"authentication":"Ely.by sign-in is not implemented yet"}))
+}
+
+#[tauri::command]
 fn is_game_installed(app: AppHandle, instance_id: String) -> Result<bool, String> {
     let root = instances_dir(&app)?;
     let instance = read_instance(&root, &instance_id)?;
@@ -506,7 +547,7 @@ fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_app_info, list_game_versions, install_game, get_runtime_info, is_game_installed,
+            get_app_info, list_game_versions, install_game, get_runtime_info, check_launch_readiness, is_game_installed,
             list_instances, create_instance, rename_instance, delete_instance
         ])
         .run(tauri::generate_context!())

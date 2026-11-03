@@ -5,7 +5,7 @@ import { Blocks, Box, Gamepad2, Settings, Plus, Play, Download, Sparkles, Monito
 type Page = "Play" | "Instances" | "Mods" | "Settings";
 type Instance = { id: string; name: string; gameVersion: string; loader: string; createdAt: number };
 type GameVersion = { id: string; versionType: string };
-type InstallResult = { version: string; librariesDownloaded: number; assetsDownloaded: number; alreadyPresent: number };
+type InstallResult = { version: string; librariesDownloaded: number; assetsDownloaded: number; alreadyPresent: number };\ntype Readiness = { ready: boolean; checks: { id: string; label: string; ok: boolean; detail?: unknown; count?: number }[]; authentication: string };
 const nav: { label: Page; icon: typeof Gamepad2 }[] = [
   { label: "Play", icon: Gamepad2 }, { label: "Instances", icon: Box },
   { label: "Mods", icon: Blocks }, { label: "Settings", icon: Settings },
@@ -25,7 +25,7 @@ function App() {
   const [editName, setEditName] = useState("");
   const [busy, setBusy] = useState(false);
   const [installing, setInstalling] = useState(false);
-  const [installed, setInstalled] = useState(false);
+  const [installed, setInstalled] = useState(false);\n  const [checkingLaunch, setCheckingLaunch] = useState(false);\n  const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
@@ -126,6 +126,17 @@ function App() {
               {installing ? "INSTALLING…" : installed ? "VERIFY / REPAIR GAME FILES" : "INSTALL MINECRAFT"}
               <span>{installing ? "Downloading official files" : installed ? "Files installed" : "Client · libraries · assets"}</span>
             </button>
+            {installed && <button className="outline-button readiness-button" disabled={checkingLaunch} onClick={async () => {
+              if (!selected) return;
+              setCheckingLaunch(true); setError(""); setNotice("");
+              try {
+                const result = await invoke<Readiness>("check_launch_readiness", { instanceId: selected.id });
+                setReadiness(result);
+                setNotice(result.ready ? "Runtime checks passed. Ely.by authentication is still required before launching." : "Some runtime checks need attention.");
+              } catch (e) { setError(String(e)); }
+              finally { setCheckingLaunch(false); }
+            }}><RefreshCw size={15}/>{checkingLaunch ? "CHECKING…" : "CHECK LAUNCH READINESS"}</button>}
+            {readiness && <div className="readiness-list">{readiness.checks.map((check) => <div key={check.id}><span className={check.ok ? "status-dot" : "status-dot status-fail"}/>{check.label}<b>{check.ok ? "OK" : "MISSING"}</b></div>)}<small>{readiness.authentication}</small></div>}
             <p className="hint">Files are downloaded from official Mojang endpoints and checked against SHA-1 hashes and declared sizes.</p>
           </div>
           <div className="quick-grid"><div className="quick-card"><Blocks/><div><b>Mod manager</b><span>Modrinth integration planned</span></div></div><div className="quick-card"><Monitor/><div><b>Graphics</b><span>Iris, shaders and resource packs</span></div></div></div>
