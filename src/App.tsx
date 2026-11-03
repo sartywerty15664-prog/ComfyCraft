@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Blocks, Box, Gamepad2, Settings, Plus, Play, Download, Sparkles, Monitor, ChevronDown, Trash2, Pencil, RefreshCw } from "lucide-react";
 
 type Page = "Play" | "Instances" | "Mods" | "Settings";
-type Instance = { id: string; name: string; gameVersion: string; loader: string; createdAt: number };
+type Instance = { id: string; name: string; gameVersion: string; loader: string; createdAt: number };\ntype GameVersion = { id: string; versionType: string; releaseTime: string; url: string; sha1: string };
 const nav: { label: Page; icon: typeof Gamepad2 }[] = [
   { label: "Play", icon: Gamepad2 }, { label: "Instances", icon: Box },
   { label: "Mods", icon: Blocks }, { label: "Settings", icon: Settings },
@@ -14,7 +14,7 @@ function App() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [newName, setNewName] = useState("");
-  const [newVersion, setNewVersion] = useState("26.3");
+  const [newVersion, setNewVersion] = useState("");\n  const [gameVersions, setGameVersions] = useState<GameVersion[]>([]);\n  const [versionsLoading, setVersionsLoading] = useState(true);\n  const [versionsError, setVersionsError] = useState("");
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -31,7 +31,18 @@ function App() {
     } catch (e) { setError(String(e)); }
   }
 
-  useEffect(() => { void refreshInstances(); }, []);
+  useEffect(() => {
+    void refreshInstances();
+    void (async () => {
+      try {
+        const versions = await invoke<GameVersion[]>("list_game_versions");
+        setGameVersions(versions);
+        setNewVersion((current) => current && versions.some((v) => v.id === current) ? current : (versions[0]?.id ?? ""));
+        setVersionsError(versions.length ? "" : "No official release versions were returned.");
+      } catch (e) { setVersionsError(String(e)); }
+      finally { setVersionsLoading(false); }
+    })();
+  }, []);
 
   const selected = instances.find((item) => item.id === selectedId);
 
@@ -85,7 +96,7 @@ function App() {
             <div className="card-divider"/>
             <div className="launch-meta"><div><span>LOADER</span><b>{selected?.loader ?? "—"}</b></div><div><span>JAVA</span><b>Java 25 target</b></div><div><span>PROFILE</span><b>Performance</b></div></div>
             <button className="play-button" disabled><Play size={17} fill="currentColor"/> PLAY <span>Game installation next</span></button>
-            <p className="hint">Instance management is now connected to local storage. Game installation is next.</p>
+            <p className="hint">Instance management is connected. Official release versions are fetched from Mojang.</p>
           </div>
           <div className="quick-grid"><div className="quick-card"><Blocks/><div><b>Mod manager</b><span>Modrinth integration planned</span></div></div><div className="quick-card"><Monitor/><div><b>Graphics</b><span>Iris, shaders and resource packs</span></div></div></div>
         </div>}
@@ -93,8 +104,11 @@ function App() {
           <div className="page-heading"><div><div className="eyebrow">YOUR SETUPS</div><h2>Instances</h2><p>Separate vanilla and modded installations. Each instance has its own mods, worlds and settings.</p></div><button className="outline-button" onClick={() => setCreating((v) => !v)}><Plus size={16}/> New instance</button></div>
           {creating && <form className="create-panel" onSubmit={(e) => { e.preventDefault(); void createInstance(); }}>
             <label>INSTANCE NAME<input autoFocus maxLength={40} value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="My survival setup"/></label>
-            <label>MINECRAFT VERSION<input maxLength={32} value={newVersion} onChange={(e) => setNewVersion(e.target.value)} /></label>
-            <button className="primary-button" disabled={busy || !newName.trim()}><Plus size={16}/> Create instance</button>
+            <label>MINECRAFT VERSION<select value={newVersion} onChange={(e) => setNewVersion(e.target.value)} disabled={versionsLoading || gameVersions.length === 0}>
+              {versionsLoading && <option value="">Loading official versions…</option>}
+              {gameVersions.map((version) => <option key={version.id} value={version.id}>{version.id}</option>)}
+            </select></label>
+            <button className="primary-button" disabled={busy || !newName.trim() || !newVersion}><Plus size={16}/> Create instance</button>\n            {versionsError && <p className="version-error">{versionsError}</p>}
           </form>}
           {instances.length === 0 ? <div className="empty-state"><Box size={30}/><h3>No instances yet</h3><p>Create your first isolated Minecraft setup.</p></div> :
             <div className="instance-list">{instances.map((item) => <article className={selectedId === item.id ? "instance-row selected" : "instance-row"} key={item.id}>
