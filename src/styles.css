@@ -14,3 +14,30 @@
 .readiness-list > div b { margin-left: auto; font-size: 11px; letter-spacing: .06em; }
 .readiness-list small { opacity: .65; line-height: 1.45; }
 .status-dot.status-fail { background: #e5a14b; }
+
+
+.argument-preview {
+  margin-top: 10px;
+  border: 1px solid var(--border, rgba(255,255,255,.09));
+  border-radius: 10px;
+  background: rgba(255,255,255,.025);
+  overflow: hidden;
+}
+.argument-preview summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--muted, #a3a3a3);
+  font-size: 12px;
+  user-select: none;
+}
+.argument-preview pre {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-top: 1px solid var(--border, rgba(255,255,255,.09));
+  color: var(--text, #e8e8e8);
+  font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
