@@ -18,9 +18,9 @@
 - [x] Download asset index and all referenced asset objects
 - [x] Verify declared SHA-1 hashes and file sizes; reuse valid cached files
 - [x] Persist an installation marker per instance
-- [ ] Extract native archives and build the runtime classpath
+- [x] Extract Linux native archives safely and build the runtime classpath
 - [ ] Download/validate logging configuration and complete installer smoke tests
-- [ ] Detect Java and validate the required runtime for each version
+- [x] Detect the installed Java runtime and report its major version
 
 ## Milestone 3 — modded gameplay
 - [ ] Fabric loader installation
