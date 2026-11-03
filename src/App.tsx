@@ -5,7 +5,8 @@ import { Blocks, Box, Gamepad2, Settings, Plus, Play, Download, Sparkles, Monito
 type Page = "Play" | "Instances" | "Mods" | "Settings";
 type Instance = { id: string; name: string; gameVersion: string; loader: string; createdAt: number };
 type GameVersion = { id: string; versionType: string };
-type InstallResult = { version: string; librariesDownloaded: number; assetsDownloaded: number; alreadyPresent: number };\ntype Readiness = { ready: boolean; checks: { id: string; label: string; ok: boolean; detail?: unknown; count?: number }[]; authentication: string };
+type InstallResult = { version: string; librariesDownloaded: number; assetsDownloaded: number; alreadyPresent: number };
+type Readiness = { ready: boolean; checks: { id: string; label: string; ok: boolean; detail?: unknown; count?: number }[]; authentication: string };
 const nav: { label: Page; icon: typeof Gamepad2 }[] = [
   { label: "Play", icon: Gamepad2 }, { label: "Instances", icon: Box },
   { label: "Mods", icon: Blocks }, { label: "Settings", icon: Settings },
@@ -25,7 +26,9 @@ function App() {
   const [editName, setEditName] = useState("");
   const [busy, setBusy] = useState(false);
   const [installing, setInstalling] = useState(false);
-  const [installed, setInstalled] = useState(false);\n  const [checkingLaunch, setCheckingLaunch] = useState(false);\n  const [readiness, setReadiness] = useState<Readiness | null>(null);
+  const [installed, setInstalled] = useState(false);
+  const [checkingLaunch, setCheckingLaunch] = useState(false);
+  const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
