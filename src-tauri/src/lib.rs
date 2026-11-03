@@ -442,6 +442,99 @@ fn get_runtime_info(app: AppHandle, instance_id: String) -> Result<Value, String
     }))
 }
 
+
+fn collect_argument_values(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::String(text) => output.push(text.clone()),
+        Value::Array(items) => {
+            for item in items { collect_argument_values(item, output); }
+        }
+        Value::Object(object) => {
+            if !rule_allows(value) { return; }
+            if let Some(inner) = object.get("value") {
+                collect_argument_values(inner, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn expand_argument_placeholders(value: &str, game_dir: &Path, assets_dir: &Path,
+    natives_dir: &Path, classpath: &str, asset_index: &str) -> (String, Vec<String>) {
+    let replacements = [
+        ("${game_directory}", game_dir.to_string_lossy().into_owned()),
+        ("${assets_root}", assets_dir.to_string_lossy().into_owned()),
+        ("${assets_directory}", assets_dir.to_string_lossy().into_owned()),
+        ("${natives_directory}", natives_dir.to_string_lossy().into_owned()),
+        ("${classpath}", classpath.to_string()),
+        ("${asset_index}", asset_index.to_string()),
+        ("${library_directory}", game_dir.join("libraries").to_string_lossy().into_owned()),
+        ("${launcher_name}", "ComfyCraft".to_string()),
+        ("${launcher_version}", env!("CARGO_PKG_VERSION").to_string()),
+    ];
+    let mut expanded = value.to_string();
+    for (key, replacement) in replacements { expanded = expanded.replace(key, &replacement); }
+    let mut unresolved = Vec::new();
+    let mut rest = expanded.as_str();
+    while let Some(start) = rest.find("${") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else { break; };
+        let token = &after[..end];
+        if !unresolved.iter().any(|item| item == token) { unresolved.push(token.to_string()); }
+        rest = &after[end + 1..];
+    }
+    (expanded, unresolved)
+}
+
+#[tauri::command]
+fn inspect_launch_arguments(app: AppHandle, instance_id: String) -> Result<Value, String> {
+    let root = instances_dir(&app)?;
+    let instance = read_instance(&root, &instance_id)?;
+    let game_dir = root.join(&instance_id).join("game");
+    let metadata_path = game_dir.join("versions").join(&instance.game_version)
+        .join(format!("{}.json", instance.game_version));
+    let metadata: Value = serde_json::from_slice(&fs::read(&metadata_path)
+        .map_err(|e| format!("Game metadata is not installed: {e}"))?)
+        .map_err(|e| format!("Cannot parse game metadata: {e}"))?;
+    let runtime = get_runtime_info(app.clone(), instance_id.clone())?;
+    let classpath = runtime.get("classpath").and_then(Value::as_str).unwrap_or("");
+    let assets_dir = game_dir.join("assets");
+    let natives_dir = game_dir.join("natives");
+    let asset_index = metadata.get("assetIndex").and_then(|v| v.get("id"))
+        .and_then(Value::as_str).unwrap_or("");
+    let mut jvm = Vec::new();
+    let mut game = Vec::new();
+    if let Some(arguments) = metadata.get("arguments") {
+        if let Some(values) = arguments.get("jvm") { collect_argument_values(values, &mut jvm); }
+        if let Some(values) = arguments.get("game") { collect_argument_values(values, &mut game); }
+    } else {
+        return Err("This Minecraft version uses legacy arguments; compatibility handling is not implemented yet".into());
+    }
+    let mut unresolved = Vec::new();
+    let expand = |items: Vec<String>, unresolved: &mut Vec<String>| -> Vec<String> {
+        items.into_iter().map(|item| {
+            let (value, missing) = expand_argument_placeholders(
+                &item, &game_dir, &assets_dir, &natives_dir, classpath, asset_index
+            );
+            for token in missing {
+                if !unresolved.contains(&token) { unresolved.push(token); }
+            }
+            value
+        }).collect()
+    };
+    let jvm = expand(jvm, &mut unresolved);
+    let game = expand(game, &mut unresolved);
+    Ok(serde_json::json!({
+        "version": instance.game_version,
+        "jvmArgumentCount": jvm.len(),
+        "gameArgumentCount": game.len(),
+        "unresolvedPlaceholders": unresolved,
+        "authenticationRequired": true,
+        "launchEnabled": false,
+        "note": "Argument metadata parsed for inspection only. Authentication and process supervision are not implemented."
+    }))
+}
+
 #[tauri::command]
 fn check_launch_readiness(app: AppHandle, instance_id: String) -> Result<Value, String> {
     let root = instances_dir(&app)?;
@@ -560,7 +653,7 @@ fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_app_info, list_game_versions, install_game, get_runtime_info, check_launch_readiness, is_game_installed,
+            get_app_info, list_game_versions, install_game, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
             list_instances, create_instance, rename_instance, delete_instance
         ])
         .run(tauri::generate_context!())
