@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { Blocks, Box, Gamepad2, Settings, Plus, Play, Download, Sparkles, Monitor, ChevronDown, Trash2, Pencil, RefreshCw } from "lucide-react";
 
 type Page = "Play" | "Instances" | "Mods" | "Settings";
-type Instance = { id: string; name: string; gameVersion: string; loader: string; createdAt: number };\ntype GameVersion = { id: string; versionType: string; releaseTime: string; url: string; sha1: string };
+type Instance = { id: string; name: string; gameVersion: string; loader: string; createdAt: number };
+type GameVersion = { id: string; versionType: string; releaseTime: string; url: string; sha1: string };
 const nav: { label: Page; icon: typeof Gamepad2 }[] = [
   { label: "Play", icon: Gamepad2 }, { label: "Instances", icon: Box },
   { label: "Mods", icon: Blocks }, { label: "Settings", icon: Settings },
@@ -14,7 +15,10 @@ function App() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [newName, setNewName] = useState("");
-  const [newVersion, setNewVersion] = useState("");\n  const [gameVersions, setGameVersions] = useState<GameVersion[]>([]);\n  const [versionsLoading, setVersionsLoading] = useState(true);\n  const [versionsError, setVersionsError] = useState("");
+  const [newVersion, setNewVersion] = useState("");
+  const [gameVersions, setGameVersions] = useState<GameVersion[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(true);
+  const [versionsError, setVersionsError] = useState("");
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -108,7 +112,8 @@ function App() {
               {versionsLoading && <option value="">Loading official versions…</option>}
               {gameVersions.map((version) => <option key={version.id} value={version.id}>{version.id}</option>)}
             </select></label>
-            <button className="primary-button" disabled={busy || !newName.trim() || !newVersion}><Plus size={16}/> Create instance</button>\n            {versionsError && <p className="version-error">{versionsError}</p>}
+            <button className="primary-button" disabled={busy || !newName.trim() || !newVersion}><Plus size={16}/> Create instance</button>
+            {versionsError && <p className="version-error">{versionsError}</p>}
           </form>}
           {instances.length === 0 ? <div className="empty-state"><Box size={30}/><h3>No instances yet</h3><p>Create your first isolated Minecraft setup.</p></div> :
             <div className="instance-list">{instances.map((item) => <article className={selectedId === item.id ? "instance-row selected" : "instance-row"} key={item.id}>
