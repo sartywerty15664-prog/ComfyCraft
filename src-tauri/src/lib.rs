@@ -460,7 +460,8 @@ fn collect_argument_values(value: &Value, output: &mut Vec<String>) {
 }
 
 fn expand_argument_placeholders(value: &str, game_dir: &Path, assets_dir: &Path,
-    natives_dir: &Path, classpath: &str, asset_index: &str) -> (String, Vec<String>) {
+    natives_dir: &Path, classpath: &str, asset_index: &str,
+    version_name: &str, version_type: &str) -> (String, Vec<String>) {
     let replacements = [
         ("${game_directory}", game_dir.to_string_lossy().into_owned()),
         ("${assets_root}", assets_dir.to_string_lossy().into_owned()),
@@ -471,6 +472,8 @@ fn expand_argument_placeholders(value: &str, game_dir: &Path, assets_dir: &Path,
         ("${library_directory}", game_dir.join("libraries").to_string_lossy().into_owned()),
         ("${launcher_name}", "ComfyCraft".to_string()),
         ("${launcher_version}", env!("CARGO_PKG_VERSION").to_string()),
+        ("${version_name}", version_name.to_string()),
+        ("${version_type}", version_type.to_string()),
     ];
     let mut expanded = value.to_string();
     for (key, replacement) in replacements { expanded = expanded.replace(key, &replacement); }
@@ -514,7 +517,9 @@ fn inspect_launch_arguments(app: AppHandle, instance_id: String) -> Result<Value
     let expand = |items: Vec<String>, unresolved: &mut Vec<String>| -> Vec<String> {
         items.into_iter().map(|item| {
             let (value, missing) = expand_argument_placeholders(
-                &item, &game_dir, &assets_dir, &natives_dir, classpath, asset_index
+                &item, &game_dir, &assets_dir, &natives_dir, classpath, asset_index,
+                &instance.game_version,
+                metadata.get("type").and_then(Value::as_str).unwrap_or("release")
             );
             for token in missing {
                 if !unresolved.contains(&token) { unresolved.push(token); }
