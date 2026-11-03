@@ -755,6 +755,22 @@ mod launch_rule_tests {
     use super::*;
 
     #[test]
+    fn parses_modern_java_versions() {
+        assert_eq!(parse_java_version("openjdk version \"25.0.1\" 2025-04-15"), Some(("25.0.1".into(), 25)));
+        assert_eq!(parse_java_version("java version \"21\" 2023-09-19"), Some(("21".into(), 21)));
+    }
+
+    #[test]
+    fn parses_legacy_java_versions() {
+        assert_eq!(parse_java_version("java version \"1.8.0_402\""), Some(("1.8.0_402".into(), 8)));
+    }
+
+    #[test]
+    fn rejects_unrecognized_java_version_output() {
+        assert_eq!(parse_java_version("java launcher unavailable"), None);
+    }
+
+    #[test]
     fn libraries_without_rules_are_allowed() {
         assert!(rule_allows(&serde_json::json!({"name":"example"})));
     }
