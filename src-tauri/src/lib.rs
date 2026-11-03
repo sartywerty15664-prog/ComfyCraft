@@ -830,6 +830,222 @@ fn is_game_installed(app: AppHandle, instance_id: String) -> Result<bool, String
         && marker.get("verified").and_then(Value::as_bool) == Some(true))
 }
 
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModrinthMod {
+    project_id: String,
+    slug: String,
+    title: String,
+    description: String,
+    icon_url: Option<String>,
+    downloads: u64,
+    author: String,
+    latest_version: Option<String>,
+}
+
+fn modrinth_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder().user_agent("ComfyCraft/0.1.0 (https://github.com/sartywerty15664-prog/ComfyCraft)")
+        .build().map_err(|e| format!("Cannot initialize Modrinth client: {e}"))
+}
+
+#[tauri::command]
+async fn search_modrinth_mods(app: AppHandle, instance_id: String, query: String) -> Result<Vec<ModrinthMod>, String> {
+    let root = instances_dir(&app)?;
+    let instance = read_instance(&root, &instance_id)?;
+    if !instance.loader.starts_with("Fabric ") {
+        return Err("Install Fabric for this instance before browsing Fabric mods.".into());
+    }
+    let query = query.trim();
+    if query.len() > 100 { return Err("Search query is too long.".into()); }
+    let client = modrinth_client()?;
+    let facets = serde_json::json!([
+        ["project_type:mod"],
+        [format!("versions:{}", instance.game_version)],
+        ["categories:fabric"]
+    ]).to_string();
+    let response: Value = client.get("https://api.modrinth.com/v2/search")
+        .query(&[("query", query), ("facets", facets.as_str()), ("limit", "30")])
+        .send().await.map_err(|e| format!("Modrinth search failed: {e}"))?
+        .error_for_status().map_err(|e| format!("Modrinth search returned an error: {e}"))?
+        .json().await.map_err(|e| format!("Cannot parse Modrinth search results: {e}"))?;
+    let hits = response.get("hits").and_then(Value::as_array).ok_or("Modrinth returned no results list")?;
+    Ok(hits.iter().filter_map(|hit| Some(ModrinthMod {
+        project_id: hit.get("project_id")?.as_str()?.to_string(),
+        slug: hit.get("slug").and_then(Value::as_str).unwrap_or_default().to_string(),
+        title: hit.get("title").and_then(Value::as_str).unwrap_or("Untitled mod").to_string(),
+        description: hit.get("description").and_then(Value::as_str).unwrap_or_default().to_string(),
+        icon_url: hit.get("icon_url").and_then(Value::as_str).map(str::to_string),
+        downloads: hit.get("downloads").and_then(Value::as_u64).unwrap_or(0),
+        author: hit.get("author").and_then(Value::as_str).unwrap_or("Unknown").to_string(),
+        latest_version: hit.get("latest_version").and_then(Value::as_str).map(str::to_string),
+    })).collect())
+}
+
+fn safe_mod_filename(name: &str) -> Result<String, String> {
+    if name.is_empty() || name.len() > 180 || name == "." || name == ".."
+        || name.contains('/') || name.contains('\\') || name.chars().any(char::is_control) {
+        return Err("Modrinth returned an unsafe file name.".into());
+    }
+    if !name.to_ascii_lowercase().ends_with(".jar") {
+        return Err("Selected Modrinth file is not a JAR.".into());
+    }
+    Ok(name.to_string())
+}
+
+fn sha1_matches(bytes: &[u8], expected: &str) -> bool {
+    format!("{:x}", Sha1::digest(bytes)).eq_ignore_ascii_case(expected)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstalledModEntry {
+    project_id: String,
+    version_id: String,
+    name: String,
+    filename: String,
+    sha1: String,
+}
+
+fn read_installed_mods(instance_dir: &Path) -> Result<Vec<InstalledModEntry>, String> {
+    let path = instance_dir.join(".comfycraft-mods.json");
+    if !path.exists() { return Ok(Vec::new()); }
+    let data = fs::read(path).map_err(|e| format!("Cannot read mod manifest: {e}"))?;
+    serde_json::from_slice(&data).map_err(|e| format!("Invalid mod manifest: {e}"))
+}
+
+fn write_installed_mods(instance_dir: &Path, entries: &[InstalledModEntry]) -> Result<(), String> {
+    let path = instance_dir.join(".comfycraft-mods.json");
+    let temp = instance_dir.join(".comfycraft-mods.json.tmp");
+    let data = serde_json::to_vec_pretty(entries).map_err(|e| e.to_string())?;
+    fs::write(&temp, data).map_err(|e| format!("Cannot stage mod manifest: {e}"))?;
+    fs::rename(temp, path).map_err(|e| format!("Cannot save mod manifest: {e}"))
+}
+
+#[tauri::command]
+fn list_installed_mods(app: AppHandle, instance_id: String) -> Result<Vec<InstalledModEntry>, String> {
+    let root = instances_dir(&app)?;
+    let _instance = read_instance(&root, &instance_id)?;
+    read_installed_mods(&root.join(instance_id))
+}
+
+async fn modrinth_compatible_version(client: &reqwest::Client, project_id: &str, game_version: &str) -> Result<Value, String> {
+    let url = format!("https://api.modrinth.com/v2/project/{project_id}/version");
+    let versions: Vec<Value> = client.get(url).query(&[
+        ("game_versions", format!("[\"{game_version}\"]")),
+        ("loaders", "[\"fabric\"]".to_string()),
+    ]).send().await.map_err(|e| format!("Cannot resolve required mod dependency: {e}"))?
+        .error_for_status().map_err(|e| format!("Mod dependency lookup failed: {e}"))?
+        .json().await.map_err(|e| format!("Cannot parse dependency versions: {e}"))?;
+    versions.into_iter().next().ok_or_else(|| format!("No Fabric version compatible with Minecraft {game_version} was found for dependency {project_id}"))
+}
+
+#[tauri::command]
+async fn install_modrinth_mod(app: AppHandle, instance_id: String, project_id: String) -> Result<Vec<InstalledModEntry>, String> {
+    let root = instances_dir(&app)?;
+    let instance = read_instance(&root, &instance_id)?;
+    if !instance.loader.starts_with("Fabric ") {
+        return Err("This instance needs Fabric before mods can be installed.".into());
+    }
+    let instance_dir = root.join(&instance_id);
+    let mods_dir = instance_dir.join("mods");
+    fs::create_dir_all(&mods_dir).map_err(|e| format!("Cannot create mods directory: {e}"))?;
+    let client = modrinth_client()?;
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(project_id);
+    let mut visited = std::collections::HashSet::new();
+    let mut pending: Vec<(String, String, String, String, Vec<u8>)> = Vec::new();
+
+    while let Some(project) = queue.pop_front() {
+        if !visited.insert(project.clone()) { continue; }
+        if visited.len() > 40 { return Err("Dependency tree is too large; installation stopped.".into()); }
+        let version = modrinth_compatible_version(&client, &project, &instance.game_version).await?;
+        if let Some(dependencies) = version.get("dependencies").and_then(Value::as_array) {
+            for dependency in dependencies {
+                if dependency.get("dependency_type").and_then(Value::as_str) != Some("required") { continue; }
+                if let Some(version_id) = dependency.get("version_id").and_then(Value::as_str) {
+                    let dep_url = format!("https://api.modrinth.com/v2/version/{version_id}");
+                    let dep_version: Value = client.get(dep_url).send().await
+                        .map_err(|e| format!("Cannot inspect required dependency: {e}"))?
+                        .error_for_status().map_err(|e| format!("Required dependency lookup failed: {e}"))?
+                        .json().await.map_err(|e| format!("Cannot parse required dependency: {e}"))?;
+                    let dep_project = dep_version.get("project_id").and_then(Value::as_str)
+                        .ok_or("Dependency version has no project ID")?.to_string();
+                    if !visited.contains(&dep_project) { queue.push_back(dep_project); }
+                } else if let Some(dep_project) = dependency.get("project_id").and_then(Value::as_str) {
+                    if !visited.contains(dep_project) { queue.push_back(dep_project.to_string()); }
+                }
+            }
+        }
+        let version_id = version.get("id").and_then(Value::as_str).ok_or("Modrinth version has no ID")?.to_string();
+        let files = version.get("files").and_then(Value::as_array).ok_or("Modrinth version has no files")?;
+        let file = files.iter().find(|file| file.get("primary").and_then(Value::as_bool) == Some(true))
+            .or_else(|| files.first()).ok_or("Modrinth version has no downloadable file")?;
+        let filename = safe_mod_filename(file.get("filename").and_then(Value::as_str).ok_or("Modrinth file has no name")?)?;
+        let url = file.get("url").and_then(Value::as_str).ok_or("Modrinth file has no URL")?;
+        if !url.starts_with("https://") { return Err("Refusing non-HTTPS Modrinth download.".into()); }
+        let hashes = file.get("hashes").ok_or("Modrinth file has no hashes")?;
+        let expected_sha1 = hashes.get("sha1").and_then(Value::as_str).ok_or("Modrinth file has no SHA-1 hash")?.to_string();
+        let bytes = client.get(url).send().await.map_err(|e| format!("Mod download failed: {e}"))?
+            .error_for_status().map_err(|e| format!("Mod download returned an error: {e}"))?
+            .bytes().await.map_err(|e| format!("Cannot read mod download: {e}"))?.to_vec();
+        if !sha1_matches(&bytes, &expected_sha1) {
+            return Err(format!("SHA-1 verification failed for {filename}"));
+        }
+        let title = version.get("name").and_then(Value::as_str).unwrap_or(&project).to_string();
+        pending.push((project, version_id, title, filename, bytes));
+    }
+
+    let mut entries = read_installed_mods(&instance_dir)?;
+    let mut staged = Vec::new();
+    for (project, version, name, filename, bytes) in pending {
+        let target = mods_dir.join(&filename);
+        if target.exists() && !entries.iter().any(|entry| entry.filename == filename && entry.project_id == project) {
+            return Err(format!("A file named {filename} already exists and is not managed by ComfyCraft; it was left untouched."));
+        }
+        let temp = mods_dir.join(format!(".{filename}.comfycraft-part"));
+        fs::write(&temp, &bytes).map_err(|e| format!("Cannot stage {filename}: {e}"))?;
+        staged.push((temp, target, InstalledModEntry {
+            project_id: project, version_id: version, name, filename,
+            sha1: format!("{:x}", Sha1::digest(&bytes)),
+        }));
+    }
+    for (temp, target, entry) in staged {
+        if let Some(existing) = entries.iter().find(|item| item.project_id == entry.project_id) {
+            let old_path = mods_dir.join(&existing.filename);
+            if old_path != target { let _ = fs::remove_file(old_path); }
+        }
+        fs::rename(temp, &target).map_err(|e| format!("Cannot activate mod file: {e}"))?;
+        entries.retain(|item| item.project_id != entry.project_id);
+        entries.push(entry);
+    }
+    write_installed_mods(&instance_dir, &entries)?;
+    Ok(entries)
+}
+
+#[tauri::command]
+fn uninstall_modrinth_mod(app: AppHandle, instance_id: String, project_id: String) -> Result<Vec<InstalledModEntry>, String> {
+    let root = instances_dir(&app)?;
+    let _instance = read_instance(&root, &instance_id)?;
+    let instance_dir = root.join(&instance_id);
+    let mods_dir = instance_dir.join("mods");
+    let mut entries = read_installed_mods(&instance_dir)?;
+    let Some(entry) = entries.iter().find(|entry| entry.project_id == project_id).cloned() else {
+        return Err("This mod is not managed by ComfyCraft.".into());
+    };
+    let path = mods_dir.join(safe_mod_filename(&entry.filename)?);
+    if path.exists() {
+        let bytes = fs::read(&path).map_err(|e| format!("Cannot verify installed mod before removal: {e}"))?;
+        if !sha1_matches(&bytes, &entry.sha1) {
+            return Err("The installed file changed outside ComfyCraft; it was left untouched.".into());
+        }
+        fs::remove_file(path).map_err(|e| format!("Cannot remove mod file: {e}"))?;
+    }
+    entries.retain(|item| item.project_id != project_id);
+    write_installed_mods(&instance_dir, &entries)?;
+    Ok(entries)
+}
+
 #[tauri::command]
 fn list_instances(app: AppHandle) -> Result<Vec<Instance>, String> {
     let dir = instances_dir(&app)?;
@@ -896,7 +1112,7 @@ fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_app_info, list_game_versions, list_java_runtimes, select_java_runtime, install_game, install_fabric, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
+            get_app_info, list_game_versions, list_java_runtimes, select_java_runtime, install_game, install_fabric, search_modrinth_mods, install_modrinth_mod, list_installed_mods, uninstall_modrinth_mod, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
             list_instances, create_instance, rename_instance, delete_instance
         ])
         .run(tauri::generate_context!())
