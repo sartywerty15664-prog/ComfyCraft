@@ -39,3 +39,10 @@ The Linux runtime manager checks `JAVA_HOME/bin/java`, Java executables availabl
 ## Java runtime selection
 
 Settings allows choosing one of the detected Java executables. The selected canonical executable path is saved in the application data directory, and runtime diagnostics plus preflight checks use that selection rather than an unrelated `java` found first on PATH. A saved selection is revalidated against the current detected runtimes; if it is no longer available, the manager falls back to the first detected runtime.
+
+
+## Fabric loader installation
+
+The Linux instance dashboard can install the latest stable Fabric Loader compatible with the instance's exact Minecraft version. ComfyCraft queries Fabric Meta v2, fetches the official launcher profile JSON, adds its loader libraries and client main class to the installed vanilla metadata, and downloads Maven artifacts into that instance's isolated library directory. Fabric is not selected by a hardcoded version: unsupported game versions return a clear error. The installer keeps the vanilla client JAR and assets, and the existing runtime inspection then sees the merged library list.
+
+The loader profile is obtained from `https://meta.fabricmc.net/v2/versions/loader/{game_version}/{loader_version}/profile/json`. Version discovery uses `/v2/versions/loader/{game_version}` and prefers the newest stable entry. Artifact URLs must use HTTPS. The current implementation does not yet provide rollback across a multi-file Fabric install and Maven artifacts without upstream checksums are transported over HTTPS; integrity metadata and staged activation are follow-up hardening tasks. Launch remains blocked pending the Ely.by authentication and process-supervision stages above.
