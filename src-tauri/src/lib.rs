@@ -182,7 +182,7 @@ fn extract_native_archive(archive_path: &Path, destination: &Path) -> Result<usi
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
         if entry.is_dir() { continue; }
-        let Some(relative) = entry.enclosed_name().map(Path::to_path_buf) else { continue; };
+        let Some(relative) = entry.enclosed_name() else { continue; };
         if relative.components().any(|part| matches!(part, Component::ParentDir | Component::RootDir | Component::Prefix(_))) {
             continue;
         }
