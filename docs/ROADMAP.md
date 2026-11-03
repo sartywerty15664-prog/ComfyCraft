@@ -6,9 +6,9 @@
 - [ ] Build and smoke-test on CachyOS/Arch
 
 ## Milestone 1 — instance foundation
-- [ ] Managed instance directory layout
-- [ ] Create, rename, duplicate and remove instances
-- [ ] Persistent metadata and safe filesystem boundaries
+- [x] Managed instance directory layout
+- [x] Create, rename and remove instances
+- [x] Persistent JSON metadata and validated instance identifiers
 
 ## Milestone 2 — game installation
 - [ ] Resolve official version manifest and per-version metadata
