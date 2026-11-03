@@ -20,7 +20,9 @@
 - [x] Persist an installation marker per instance
 - [x] Extract Linux native archives safely and build the runtime classpath
 - [ ] Download/validate logging configuration and complete installer smoke tests
-- [x] Detect Java runtimes from JAVA_HOME, PATH and common Linux JVM directories\n- [x] Parse modern and legacy Java version strings with unit tests\n- [x] Show detected runtimes and Java 25 compatibility in Settings
+- [x] Detect Java runtimes from JAVA_HOME, PATH and common Linux JVM directories
+- [x] Parse modern and legacy Java version strings with unit tests
+- [x] Show detected runtimes and Java 25 compatibility in Settings
 
 ## Milestone 3 — modded gameplay
 - [ ] Fabric loader installation
