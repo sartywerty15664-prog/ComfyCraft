@@ -5,6 +5,7 @@ import { Blocks, Box, Gamepad2, Settings, Plus, Play, Download, Sparkles, Monito
 type Page = "Play" | "Instances" | "Mods" | "Settings";
 type Instance = { id: string; name: string; gameVersion: string; loader: string; createdAt: number };
 type GameVersion = { id: string; versionType: string };
+type JavaRuntime = { executable: string; version: string; major: number; vendor?: string };
 type InstallResult = { version: string; librariesDownloaded: number; assetsDownloaded: number; alreadyPresent: number };
 type Readiness = { ready: boolean; checks: { id: string; label: string; ok: boolean; detail?: unknown; count?: number }[]; authentication: string };
 type LaunchInspection = { version: string; requiredJavaMajor: number; javaRuntime: { available: boolean; version?: string; major?: number }; jvmArgumentCount: number; gameArgumentCount: number; jvmArguments: string[]; gameArguments: string[]; unresolvedPlaceholders: string[]; authenticationRequired: boolean; launchEnabled: boolean; note: string };
@@ -20,6 +21,8 @@ function App() {
   const [newName, setNewName] = useState("");
   const [newVersion, setNewVersion] = useState("");
   const [gameVersions, setGameVersions] = useState<GameVersion[]>([]);
+  const [javaRuntimes, setJavaRuntimes] = useState<JavaRuntime[]>([]);
+  const [javaLoading, setJavaLoading] = useState(false);
   const [versionsLoading, setVersionsLoading] = useState(true);
   const [versionsError, setVersionsError] = useState("");
   const [creating, setCreating] = useState(false);
@@ -33,6 +36,13 @@ function App() {
   const [launchInspection, setLaunchInspection] = useState<LaunchInspection | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+
+  async function refreshJavaRuntimes() {
+    setJavaLoading(true);
+    try { setJavaRuntimes(await invoke<JavaRuntime[]>("list_java_runtimes")); }
+    catch (e) { setError(String(e)); }
+    finally { setJavaLoading(false); }
+  }
 
   async function refreshInstances() {
     try {
@@ -51,6 +61,7 @@ function App() {
 
   useEffect(() => {
     void refreshInstances();
+    void refreshJavaRuntimes();
     void (async () => {
       try {
         const versions = await invoke<GameVersion[]>("list_game_versions");
@@ -170,7 +181,7 @@ function App() {
           <button className="refresh-button" onClick={() => void refreshInstances()}><RefreshCw size={14}/> Refresh list</button>
         </div>}
         {page === "Mods" && <div className="page"><div className="eyebrow">MODRINTH</div><h2>Mods</h2><p>Discover mods and let ComfyCraft resolve their dependencies.</p><div className="empty-state"><Download size={30}/><h3>Mod browser is next</h3><p>Search, compatibility checks, dependency installation and updates are planned.</p></div></div>}
-        {page === "Settings" && <div className="page"><div className="eyebrow">PREFERENCES</div><h2>Settings</h2><p>ComfyCraft is being designed for Linux desktops.</p><div className="settings-row"><div><b>Target platform</b><span>CachyOS / Arch Linux · Wayland / X11</span></div><strong>Linux only</strong></div><div className="settings-row"><div><b>Graphics testing</b><span>NVIDIA · KDE Plasma · Hyprland</span></div><strong>Planned</strong></div><div className="settings-row"><div><b>Account provider</b><span>Ely.by supported authentication flow</span></div><strong>Planned</strong></div></div>}
+        {page === "Settings" && <div className="page"><div className="eyebrow">PREFERENCES</div><h2>Settings</h2><p>ComfyCraft is being designed for Linux desktops.</p><div className="settings-row"><div><b>Target platform</b><span>CachyOS / Arch Linux · Wayland / X11</span></div><strong>Linux only</strong></div><div className="settings-row"><div><b>Graphics testing</b><span>NVIDIA · KDE Plasma · Hyprland</span></div><strong>Planned</strong></div><div className="settings-row"><div><b>Account provider</b><span>Ely.by supported authentication flow</span></div><strong>Planned</strong></div><div className="settings-row"><div><b>Java Runtime</b><span>Detected runtimes · Java 25 recommended for Minecraft 26.3</span></div><button className="text-action" onClick={() => void refreshJavaRuntimes()} disabled={javaLoading}><RefreshCw size={14}/>{javaLoading ? "Scanning…" : "Rescan"}</button></div>{javaRuntimes.length === 0 ? <div className="empty-state"><Monitor size={25}/><h3>No Java runtime detected</h3><p>Install a Linux Java runtime, then rescan. ComfyCraft will not download runtimes from unverified sources.</p></div> : <div className="instance-list">{javaRuntimes.map((runtime) => <article className="instance-row" key={runtime.executable}><div className="game-icon"><Monitor size={20}/></div><div className="instance-row-info"><b>Java {runtime.major} · {runtime.version}</b><span>{runtime.vendor ?? "Java runtime"} · {runtime.executable}</span></div><strong>{runtime.major >= 25 ? "Compatible with 26.3 target" : "Older runtime"}</strong></article>)}</div>}</div>}
       </section>
     </main>
   );
