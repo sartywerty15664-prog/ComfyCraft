@@ -149,10 +149,23 @@ fn rule_allows(library: &Value) -> bool {
     let Some(rules) = library.get("rules").and_then(Value::as_array) else { return true; };
     let mut allowed = false;
     for rule in rules {
-        let os_matches = rule.get("os").and_then(|os| os.get("name")).and_then(Value::as_str)
-            .map(|name| name == "linux").unwrap_or(true);
-        let has_features = rule.get("features").and_then(Value::as_object).map(|o| !o.is_empty()).unwrap_or(false);
-        if os_matches && !has_features {
+        let os = rule.get("os");
+        let name_matches = os.and_then(|v| v.get("name")).and_then(Value::as_str)
+            .map(|name| name == std::env::consts::OS).unwrap_or(true);
+        let arch_matches = os.and_then(|v| v.get("arch")).and_then(Value::as_str)
+            .map(|arch| arch == std::env::consts::ARCH).unwrap_or(true);
+        let features_match = rule.get("features").and_then(Value::as_object).map(|features| {
+            features.iter().all(|(key, value)| {
+                let enabled = match key.as_str() {
+                    "has_custom_resolution" | "is_demo_user" | "has_quick_plays_support" |
+                    "is_quick_play_singleplayer" | "is_quick_play_multiplayer" |
+                    "is_quick_play_realms" => false,
+                    _ => false,
+                };
+                value.as_bool() == Some(enabled)
+            })
+        }).unwrap_or(true);
+        if name_matches && arch_matches && features_match {
             match rule.get("action").and_then(Value::as_str) {
                 Some("allow") => allowed = true,
                 Some("disallow") => allowed = false,

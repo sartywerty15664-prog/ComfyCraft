@@ -34,7 +34,8 @@
 - [ ] Resource-pack manager with enable/disable controls
 
 ## Milestone 5 — launch and distribution
-- [ ] Preflight checks and structured Java process arguments
+- [x] Preflight checks for Java, client, natives, assets and libraries
+- [ ] Structured JVM/game argument expansion and Java process supervision
 - [ ] Live logs and useful crash diagnostics
 - [ ] AppImage and Arch package
 - [ ] Wayland/X11 and NVIDIA testing
