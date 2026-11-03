@@ -24,3 +24,8 @@ Store refresh credentials in the desktop OS credential store. Never write tokens
 ## Current implementation boundary
 
 The installer downloads official Mojang metadata, client, libraries and assets. Runtime inspection and preflight checks exist. The metadata argument inspector now resolves known placeholders, exposes the JVM and game argument vectors for validation, reports unresolved placeholders, and includes the required Java major version plus detected runtime version. It still does not launch Java. Ely.by callback/token handling, secure credential storage, final authentication argument injection and Java process supervision remain pending. The UI must not claim Play works until those stages are implemented and tested on Linux.
+
+
+## Metadata rule evaluation
+
+Linux library and argument rules are evaluated in their declared order, including OS name, architecture, and feature predicates. Launcher-only feature flags are explicitly false until their corresponding settings and values are implemented; unknown feature keys do not silently pass. Unit tests cover rule ordering, default behavior, and feature matching.
