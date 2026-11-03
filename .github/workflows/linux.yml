@@ -29,3 +29,5 @@ jobs:
         run: pnpm build
       - name: Check Rust backend
         run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: Run Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
