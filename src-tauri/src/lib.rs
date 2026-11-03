@@ -42,7 +42,7 @@ struct ManifestVersion {
     version_type: String,
     url: String,
     sha1: String,
-    #[serde(skip)]
+    #[serde(default)]
     active: bool,
 }
 
