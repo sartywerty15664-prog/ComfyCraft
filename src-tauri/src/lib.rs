@@ -172,6 +172,58 @@ fn artifact_task(base: &Path, artifact: &Value) -> Result<DownloadTask, String> 
     Ok(DownloadTask { url, path, sha1, size })
 }
 
+fn extract_native_archive(archive_path: &Path, destination: &Path) -> Result<usize, String> {
+    use std::io::Read;
+    let file = fs::File::open(archive_path)
+        .map_err(|e| format!("Cannot open native archive {}: {e}", archive_path.display()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Invalid native archive {}: {e}", archive_path.display()))?;
+    let mut extracted = 0usize;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
+        if entry.is_dir() { continue; }
+        let Some(relative) = entry.enclosed_name().map(Path::to_path_buf) else { continue; };
+        if relative.components().any(|part| matches!(part, Component::ParentDir | Component::RootDir | Component::Prefix(_))) {
+            continue;
+        }
+        if relative.components().next().and_then(|p| p.as_os_str().to_str()) == Some("META-INF") {
+            continue;
+        }
+        let output = destination.join(relative);
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("Cannot create native directory: {e}"))?;
+        }
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).map_err(|e| format!("Cannot read native entry: {e}"))?;
+        fs::write(&output, bytes).map_err(|e| format!("Cannot extract native file: {e}"))?;
+        extracted += 1;
+    }
+    Ok(extracted)
+}
+
+fn java_runtime() -> Value {
+    use std::process::Command;
+    let output = Command::new("java").arg("-version").output();
+    let Ok(output) = output else {
+        return serde_json::json!({"available": false, "executable": "java", "version": null});
+    };
+    let text = format!("{}{}", String::from_utf8_lossy(&output.stderr), String::from_utf8_lossy(&output.stdout));
+    let quoted = text.split('"').nth(1).unwrap_or("");
+    let first = if quoted.is_empty() {
+        text.split_whitespace().find(|part| part.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)).unwrap_or("")
+    } else { quoted };
+    let major_text = first.split('.').next().unwrap_or("");
+    let major = major_text.parse::<u32>().ok().map(|n| if n == 1 {
+        first.split('.').nth(1).and_then(|v| v.parse::<u32>().ok()).unwrap_or(n)
+    } else { n });
+    serde_json::json!({
+        "available": output.status.success(),
+        "executable": "java",
+        "version": first,
+        "major": major
+    })
+}
+
 #[tauri::command]
 fn get_app_info() -> Value {
     serde_json::json!({
@@ -253,6 +305,24 @@ async fn install_game(app: AppHandle, instance_id: String) -> Result<InstallResu
     }
     let (libraries_downloaded, libraries_existing) = download_many(&client, library_tasks).await?;
 
+    let natives_dir = game_dir.join("natives");
+    fs::create_dir_all(&natives_dir).map_err(|e| format!("Cannot create native directory: {e}"))?;
+    if let Some(libraries) = metadata.get("libraries").and_then(Value::as_array) {
+        for library in libraries {
+            if !rule_allows(library) { continue; }
+            let Some(native_template) = library.get("natives").and_then(|v| v.get("linux")).and_then(Value::as_str) else { continue; };
+            let Some(classifiers) = library.get("downloads").and_then(|v| v.get("classifiers")).and_then(Value::as_object) else { continue; };
+            let classifier_key = native_template.replace("${arch}", if std::env::consts::ARCH == "x86_64" { "64" } else { "32" });
+            if let Some(classifier) = classifiers.get(&classifier_key) {
+                let relative = classifier.get("path").and_then(Value::as_str).ok_or("Native archive path is missing")?;
+                let archive_path = game_dir.join("libraries").join(safe_relative_path(relative)?);
+                if archive_path.is_file() {
+                    extract_native_archive(&archive_path, &natives_dir)?;
+                }
+            }
+        }
+    }
+
     let mut assets_downloaded = 0usize;
     let mut assets_existing = 0usize;
     if let Some(asset_index) = metadata.get("assetIndex") {
@@ -317,6 +387,46 @@ async fn install_game(app: AppHandle, instance_id: String) -> Result<InstallResu
         assets_downloaded,
         already_present: libraries_existing + assets_existing,
     })
+}
+
+#[tauri::command]
+fn get_runtime_info(app: AppHandle, instance_id: String) -> Result<Value, String> {
+    let root = instances_dir(&app)?;
+    let instance = read_instance(&root, &instance_id)?;
+    let game_dir = root.join(&instance_id).join("game");
+    let metadata_path = game_dir.join("versions").join(&instance.game_version)
+        .join(format!("{}.json", instance.game_version));
+    let metadata: Value = serde_json::from_slice(&fs::read(&metadata_path)
+        .map_err(|e| format!("Game metadata is not installed: {e}"))?)
+        .map_err(|e| format!("Cannot parse installed game metadata: {e}"))?;
+    let mut classpath = Vec::<String>::new();
+    if let Some(libraries) = metadata.get("libraries").and_then(Value::as_array) {
+        for library in libraries {
+            if !rule_allows(library) { continue; }
+            if let Some(artifact) = library.get("downloads").and_then(|v| v.get("artifact")) {
+                if let Some(relative) = artifact.get("path").and_then(Value::as_str) {
+                    let path = game_dir.join("libraries").join(safe_relative_path(relative)?);
+                    if path.is_file() { classpath.push(path.to_string_lossy().into_owned()); }
+                }
+            }
+        }
+    }
+    let client_jar = game_dir.join("versions").join(&instance.game_version)
+        .join(format!("{}.jar", instance.game_version));
+    if !client_jar.is_file() {
+        return Err("Minecraft client JAR is missing; repair the installation first".into());
+    }
+    classpath.push(client_jar.to_string_lossy().into_owned());
+    Ok(serde_json::json!({
+        "version": instance.game_version,
+        "java": java_runtime(),
+        "classpath": classpath.join(":"),
+        "classpathEntries": classpath.len(),
+        "nativesDirectory": game_dir.join("natives"),
+        "assetsDirectory": game_dir.join("assets"),
+        "assetIndex": metadata.get("assetIndex").and_then(|v| v.get("id")).and_then(Value::as_str),
+        "gameDirectory": game_dir
+    }))
 }
 
 #[tauri::command]
@@ -396,7 +506,7 @@ fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_app_info, list_game_versions, install_game, is_game_installed,
+            get_app_info, list_game_versions, install_game, get_runtime_info, is_game_installed,
             list_instances, create_instance, rename_instance, delete_instance
         ])
         .run(tauri::generate_context!())
