@@ -27,9 +27,14 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["appimage", "deb", "rpm"],
+    "targets": [
+      "appimage",
+      "deb",
+      "rpm"
+    ],
     "category": "Game",
     "shortDescription": "A comfortable Minecraft Java launcher for Linux",
-    "longDescription": "A Linux-only Minecraft Java launcher with instance, mod, shader and performance management."
+    "longDescription": "A Linux-only Minecraft Java launcher with instance, mod, shader and performance management.",
+    "icon": []
   }
 }
