@@ -30,6 +30,7 @@ function App() {
   const [editName, setEditName] = useState("");
   const [busy, setBusy] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [installingFabric, setInstallingFabric] = useState(false);
   const [installed, setInstalled] = useState(false);
   const [checkingLaunch, setCheckingLaunch] = useState(false);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
@@ -99,6 +100,17 @@ function App() {
     finally { setInstalling(false); }
   }
 
+  async function installFabric() {
+    if (!selected || installingFabric || !installed) return;
+    setInstallingFabric(true); setError(""); setNotice("");
+    try {
+      const result = await invoke<{ loader: string; librariesDownloaded: number; librariesAlreadyPresent: number }>("install_fabric", { instanceId: selected.id });
+      await refreshInstances();
+      setNotice(`${result.loader} installed. Libraries: ${result.librariesDownloaded} downloaded; ${result.librariesAlreadyPresent} already present.`);
+    } catch (e) { setError(String(e)); }
+    finally { setInstallingFabric(false); }
+  }
+
   async function saveRename(id: string) {
     setBusy(true); setError("");
     try {
@@ -142,6 +154,7 @@ function App() {
               {installing ? "INSTALLING…" : installed ? "VERIFY / REPAIR GAME FILES" : "INSTALL MINECRAFT"}
               <span>{installing ? "Downloading official files" : installed ? "Files installed" : "Client · libraries · assets"}</span>
             </button>
+            {installed && <button className="outline-button readiness-button" disabled={installingFabric || installing} onClick={() => void installFabric()}><Blocks size={15}/>{installingFabric ? "INSTALLING FABRIC…" : selected?.loader.startsWith("Fabric ") ? "REPAIR / UPDATE FABRIC" : "INSTALL FABRIC"}<span>Latest stable compatible loader</span></button>}
             {installed && <button className="outline-button readiness-button" disabled={checkingLaunch} onClick={async () => {
               if (!selected) return;
               setCheckingLaunch(true); setError(""); setNotice("");
