@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Blocks, Box, Gamepad2, Settings, Plus, Play, Download, Sparkles, Monitor, ChevronDown, Trash2, Pencil, RefreshCw } from "lucide-react";
+import { Blocks, Box, Gamepad2, Settings, Plus, Play, Download, Sparkles, Monitor, Trash2, Pencil, RefreshCw, CheckCircle2 } from "lucide-react";
 
 type Page = "Play" | "Instances" | "Mods" | "Settings";
 type Instance = { id: string; name: string; gameVersion: string; loader: string; createdAt: number };
-type GameVersion = { id: string; versionType: string; releaseTime: string; url: string; sha1: string };
+type GameVersion = { id: string; versionType: string };
+type InstallResult = { version: string; librariesDownloaded: number; assetsDownloaded: number; alreadyPresent: number };
 const nav: { label: Page; icon: typeof Gamepad2 }[] = [
   { label: "Play", icon: Gamepad2 }, { label: "Instances", icon: Box },
   { label: "Mods", icon: Blocks }, { label: "Settings", icon: Settings },
@@ -23,6 +24,8 @@ function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installed, setInstalled] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
@@ -33,6 +36,12 @@ function App() {
       setSelectedId((current) => data.some((item) => item.id === current) ? current : (data[0]?.id ?? ""));
       setError("");
     } catch (e) { setError(String(e)); }
+  }
+
+  async function refreshInstallStatus(id: string) {
+    if (!id) { setInstalled(false); return; }
+    try { setInstalled(await invoke<boolean>("is_game_installed", { instanceId: id })); }
+    catch { setInstalled(false); }
   }
 
   useEffect(() => {
@@ -48,17 +57,30 @@ function App() {
     })();
   }, []);
 
+  useEffect(() => { void refreshInstallStatus(selectedId); }, [selectedId]);
+
   const selected = instances.find((item) => item.id === selectedId);
 
   async function createInstance() {
-    if (!newName.trim()) return;
+    if (!newName.trim() || !newVersion) return;
     setBusy(true); setError(""); setNotice("");
     try {
       const created = await invoke<Instance>("create_instance", { name: newName, gameVersion: newVersion });
       await refreshInstances(); setSelectedId(created.id); setNewName(""); setCreating(false);
-      setNotice("Instance created. Its game files can be installed next.");
+      setNotice("Instance created. Install its Minecraft files to continue.");
     } catch (e) { setError(String(e)); }
     finally { setBusy(false); }
+  }
+
+  async function installSelectedGame() {
+    if (!selected || installing) return;
+    setInstalling(true); setError(""); setNotice("");
+    try {
+      const result = await invoke<InstallResult>("install_game", { instanceId: selected.id });
+      setInstalled(true);
+      setNotice(`Minecraft ${result.version} installed and verified. Libraries: ${result.librariesDownloaded} downloaded; assets: ${result.assetsDownloaded} downloaded.`);
+    } catch (e) { setError(String(e)); }
+    finally { setInstalling(false); }
   }
 
   async function saveRename(id: string) {
@@ -99,8 +121,12 @@ function App() {
             </div>
             <div className="card-divider"/>
             <div className="launch-meta"><div><span>LOADER</span><b>{selected?.loader ?? "—"}</b></div><div><span>JAVA</span><b>Java 25 target</b></div><div><span>PROFILE</span><b>Performance</b></div></div>
-            <button className="play-button" disabled><Play size={17} fill="currentColor"/> PLAY <span>Game installation next</span></button>
-            <p className="hint">Instance management is connected. Official release versions are fetched from Mojang.</p>
+            <button className="play-button" onClick={() => void installSelectedGame()} disabled={!selected || installing || busy}>
+              {installed ? <CheckCircle2 size={17}/> : <Download size={17}/>}
+              {installing ? "INSTALLING…" : installed ? "VERIFY / REPAIR GAME FILES" : "INSTALL MINECRAFT"}
+              <span>{installing ? "Downloading official files" : installed ? "Files installed" : "Client · libraries · assets"}</span>
+            </button>
+            <p className="hint">Files are downloaded from official Mojang endpoints and checked against SHA-1 hashes and declared sizes.</p>
           </div>
           <div className="quick-grid"><div className="quick-card"><Blocks/><div><b>Mod manager</b><span>Modrinth integration planned</span></div></div><div className="quick-card"><Monitor/><div><b>Graphics</b><span>Iris, shaders and resource packs</span></div></div></div>
         </div>}
