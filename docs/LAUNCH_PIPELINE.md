@@ -34,3 +34,8 @@ Linux library and argument rules are evaluated in their declared order, includin
 ## Java runtime discovery
 
 The Linux runtime manager checks `JAVA_HOME/bin/java`, Java executables available through `PATH`, and common JVM locations under `/usr/lib/jvm`, `/usr/java` and `/opt/java`. Candidate binaries are canonicalized and deduplicated, then queried with `java -version`. Both modern version strings (for example, 25.0.1) and legacy 1.x strings are parsed. Settings lists detected runtimes and marks Java 25+ as compatible with the current 26.3 target. ComfyCraft does not silently download a runtime or execute an installer.
+
+
+## Java runtime selection
+
+Settings allows choosing one of the detected Java executables. The selected canonical executable path is saved in the application data directory, and runtime diagnostics plus preflight checks use that selection rather than an unrelated `java` found first on PATH. A saved selection is revalidated against the current detected runtimes; if it is no longer available, the manager falls back to the first detected runtime.
