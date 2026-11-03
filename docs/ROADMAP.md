@@ -40,7 +40,7 @@
 - [ ] Validate Iris compatibility with the selected Fabric and Minecraft versions
 - [x] Search, install and safely uninstall Modrinth resource packs
 - [x] Search, install and safely uninstall Modrinth shader packs
-- [ ] Enable/disable resource packs and shader packs from the launcher
+- [x] Enable/disable resource packs and shader packs from the launcher
 
 ## Milestone 5 — launch and distribution
 - [x] Preflight checks for Java, client, natives, assets and libraries
