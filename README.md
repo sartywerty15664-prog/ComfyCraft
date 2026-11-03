@@ -38,7 +38,8 @@ pnpm tauri dev
 - [x] Launch preflight and structured argument inspection
 - [ ] Ely.by sign-in and secure credential storage
 - [ ] Actual Java process launch, supervision, live logs and crash diagnostics
-- [ ] Resource/shader activation controls and one-click performance profiles
+- [x] Resource/shader activation controls
+- [ ] One-click performance profiles
 - [ ] Real CachyOS/Arch smoke tests and package verification
 
 ## Project principles
