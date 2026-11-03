@@ -7,7 +7,7 @@ type Instance = { id: string; name: string; gameVersion: string; loader: string;
 type GameVersion = { id: string; versionType: string };
 type InstallResult = { version: string; librariesDownloaded: number; assetsDownloaded: number; alreadyPresent: number };
 type Readiness = { ready: boolean; checks: { id: string; label: string; ok: boolean; detail?: unknown; count?: number }[]; authentication: string };
-type LaunchInspection = { version: string; jvmArgumentCount: number; gameArgumentCount: number; unresolvedPlaceholders: string[]; authenticationRequired: boolean; launchEnabled: boolean; note: string };
+type LaunchInspection = { version: string; requiredJavaMajor: number; javaRuntime: { available: boolean; version?: string; major?: number }; jvmArgumentCount: number; gameArgumentCount: number; jvmArguments: string[]; gameArguments: string[]; unresolvedPlaceholders: string[]; authenticationRequired: boolean; launchEnabled: boolean; note: string };
 const nav: { label: Page; icon: typeof Gamepad2 }[] = [
   { label: "Play", icon: Gamepad2 }, { label: "Instances", icon: Box },
   { label: "Mods", icon: Blocks }, { label: "Settings", icon: Settings },
@@ -144,7 +144,7 @@ function App() {
               finally { setCheckingLaunch(false); }
             }}><RefreshCw size={15}/>{checkingLaunch ? "CHECKING…" : "CHECK LAUNCH READINESS"}</button>}
             {readiness && <div className="readiness-list">{readiness.checks.map((check) => <div key={check.id}><span className={check.ok ? "status-dot" : "status-dot status-fail"}/>{check.label}<b>{check.ok ? "OK" : "MISSING"}</b></div>)}<small>{readiness.authentication}</small></div>}
-            {launchInspection && <div className="readiness-list"><div><span className="status-dot"/>JVM arguments<b>{launchInspection.jvmArgumentCount}</b></div><div><span className="status-dot"/>Game arguments<b>{launchInspection.gameArgumentCount}</b></div><div><span className={launchInspection.unresolvedPlaceholders.length ? "status-dot status-fail" : "status-dot"}/>Unresolved placeholders<b>{launchInspection.unresolvedPlaceholders.length}</b></div><small>{launchInspection.note}</small></div>}
+            {launchInspection && <div className="readiness-list"><div><span className={launchInspection.javaRuntime.available && (launchInspection.javaRuntime.major ?? 0) >= launchInspection.requiredJavaMajor ? "status-dot" : "status-dot status-fail"}/>Java runtime<b>{launchInspection.javaRuntime.version ?? "Not found"} · required {launchInspection.requiredJavaMajor}+</b></div><div><span className="status-dot"/>JVM arguments<b>{launchInspection.jvmArgumentCount}</b></div><div><span className="status-dot"/>Game arguments<b>{launchInspection.gameArgumentCount}</b></div><div><span className={launchInspection.unresolvedPlaceholders.length ? "status-dot status-fail" : "status-dot"}/>Unresolved placeholders<b>{launchInspection.unresolvedPlaceholders.length}</b></div><small>{launchInspection.note}</small></div>}
             <p className="hint">Files are downloaded from official Mojang endpoints and checked against SHA-1 hashes and declared sizes.</p>
           </div>
           <div className="quick-grid"><div className="quick-card"><Blocks/><div><b>Mod manager</b><span>Modrinth integration planned</span></div></div><div className="quick-card"><Monitor/><div><b>Graphics</b><span>Iris, shaders and resource packs</span></div></div></div>
