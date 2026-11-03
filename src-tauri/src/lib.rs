@@ -40,6 +40,50 @@ fn get_app_info() -> serde_json::Value {
     })
 }
 
+#[derive(Debug, Deserialize)]
+struct VersionManifest {
+    versions: Vec<ManifestVersion>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestVersion {
+    id: String,
+    #[serde(rename = "type")]
+    version_type: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameVersion {
+    id: String,
+    version_type: String,
+}
+
+#[tauri::command]
+async fn list_game_versions() -> Result<Vec<GameVersion>, String> {
+    let response = reqwest::Client::new()
+        .get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+        .header(reqwest::header::USER_AGENT, "ComfyCraft/0.1.0")
+        .send()
+        .await
+        .map_err(|e| format!("Cannot download Minecraft version manifest: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Minecraft version manifest request failed: {e}"))?;
+
+    let manifest: VersionManifest = response
+        .json()
+        .await
+        .map_err(|e| format!("Cannot parse Minecraft version manifest: {e}"))?;
+
+    Ok(manifest.versions.into_iter()
+        .filter(|version| version.version_type == "release")
+        .map(|version| GameVersion {
+            id: version.id,
+            version_type: version.version_type,
+        })
+        .collect())
+}
+
 #[tauri::command]
 fn list_instances(app: AppHandle) -> Result<Vec<Instance>, String> {
     let dir = instances_dir(&app)?;
