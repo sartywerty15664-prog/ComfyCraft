@@ -913,6 +913,8 @@ struct InstalledModEntry {
     name: String,
     filename: String,
     sha1: String,
+    #[serde(default)]
+    active: bool,
 }
 
 fn read_installed_mods(instance_dir: &Path) -> Result<Vec<InstalledModEntry>, String> {
