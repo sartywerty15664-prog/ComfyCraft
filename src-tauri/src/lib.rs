@@ -536,7 +536,7 @@ fn maven_artifact_task(game_dir: &Path, library: &Value) -> Result<DownloadTask,
     let artifact = parts[1];
     let version = parts[2];
     let classifier = parts.get(3).map(|v| format!("-{v}")).unwrap_or_default();
-    if [parts[0], artifact, version].iter().any(|part| part.is_empty() || part.contains('/') || part.contains('\\\\')) {
+    if [parts[0], artifact, version].iter().any(|part| part.is_empty() || part.contains('/') || part.contains('\\')) {
         return Err(format!("Unsafe Fabric library coordinate: {coordinate}"));
     }
     let relative = format!("{group}/{artifact}/{version}/{artifact}-{version}{classifier}.{extension}");
