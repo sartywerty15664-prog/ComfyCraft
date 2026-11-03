@@ -41,3 +41,24 @@
   color: var(--text, #e8e8e8);
   font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+
+.mod-search { display:flex; gap:10px; margin:24px 0 18px; }
+.mod-search input { flex:1; min-width:0; border:1px solid var(--border); border-radius:12px; background:var(--surface); color:var(--text); padding:13px 15px; font:inherit; outline:none; }
+.mod-search input:focus { border-color:var(--accent); }
+.mod-list { display:grid; gap:10px; }
+.mod-row { display:flex; align-items:center; gap:14px; padding:14px; border:1px solid var(--border); border-radius:14px; background:var(--surface); }
+.mod-icon { width:48px; height:48px; border-radius:10px; object-fit:cover; flex:none; }
+.mod-icon.fallback { display:grid; place-items:center; background:var(--surface-raised); color:var(--muted); }
+.mod-info { min-width:0; flex:1; }
+.mod-info b { display:block; }
+.mod-info span,.mod-info p { color:var(--muted); font-size:12px; }
+.mod-info p { margin:6px 0 0; line-height:1.45; }
+.installed-mods { margin-top:28px; padding-top:18px; border-top:1px solid var(--border); }
+.section-kicker { color:var(--muted); font-size:10px; letter-spacing:.12em; font-weight:700; margin-bottom:12px; }
+.muted { color:var(--muted); font-size:13px; }
+.installed-mod-row { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--border); font-size:13px; }
+.installed-mod-row span { flex:1; }
+.installed-mod-row small { color:var(--muted); }
+.compact-empty { margin-top:12px; padding:28px; }
+@media (max-width: 700px) { .mod-row { align-items:flex-start; flex-wrap:wrap; } .mod-info { flex-basis:calc(100% - 64px); } .mod-row > button { margin-left:62px; } .installed-mod-row { flex-wrap:wrap; } .installed-mod-row small { width:100%; order:3; } }

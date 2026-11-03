@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Blocks, Box, Gamepad2, Settings, Plus, Play, Download, Sparkles, Monitor, Trash2, Pencil, RefreshCw, CheckCircle2 } from "lucide-react";
+import { Blocks, Box, Gamepad2, Settings, Plus, Play, Download, Sparkles, Monitor, Trash2, Pencil, RefreshCw, CheckCircle2, Search } from "lucide-react";
 
 type Page = "Play" | "Instances" | "Mods" | "Settings";
 type Instance = { id: string; name: string; gameVersion: string; loader: string; createdAt: number };
@@ -8,6 +8,8 @@ type GameVersion = { id: string; versionType: string };
 type JavaRuntime = { executable: string; version: string; major: number; vendor?: string; selected: boolean };
 type InstallResult = { version: string; librariesDownloaded: number; assetsDownloaded: number; alreadyPresent: number };
 type Readiness = { ready: boolean; checks: { id: string; label: string; ok: boolean; detail?: unknown; count?: number }[]; authentication: string };
+type ModrinthMod = { projectId: string; slug: string; title: string; description: string; iconUrl?: string; downloads: number; author: string; latestVersion?: string };
+type InstalledMod = { projectId: string; versionId: string; name: string; filename: string; sha1: string };
 type LaunchInspection = { version: string; requiredJavaMajor: number; javaRuntime: { available: boolean; version?: string; major?: number }; jvmArgumentCount: number; gameArgumentCount: number; jvmArguments: string[]; gameArguments: string[]; unresolvedPlaceholders: string[]; authenticationRequired: boolean; launchEnabled: boolean; note: string };
 const nav: { label: Page; icon: typeof Gamepad2 }[] = [
   { label: "Play", icon: Gamepad2 }, { label: "Instances", icon: Box },
@@ -37,6 +39,11 @@ function App() {
   const [launchInspection, setLaunchInspection] = useState<LaunchInspection | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [modQuery, setModQuery] = useState("");
+  const [modResults, setModResults] = useState<ModrinthMod[]>([]);
+  const [installedMods, setInstalledMods] = useState<InstalledMod[]>([]);
+  const [searchingMods, setSearchingMods] = useState(false);
+  const [modBusy, setModBusy] = useState("");
 
   async function refreshJavaRuntimes() {
     setJavaLoading(true);
@@ -74,7 +81,37 @@ function App() {
     })();
   }, []);
 
-  useEffect(() => { void refreshInstallStatus(selectedId); }, [selectedId]);
+  useEffect(() => { void refreshInstallStatus(selectedId); void refreshInstalledMods(selectedId); setModResults([]); }, [selectedId]);
+
+  async function refreshInstalledMods(id: string) {
+    if (!id) { setInstalledMods([]); return; }
+    try { setInstalledMods(await invoke<InstalledMod[]>("list_installed_mods", { instanceId: id })); }
+    catch (e) { setError(String(e)); }
+  }
+
+  async function searchMods() {
+    if (!selected || !selected.loader.startsWith("Fabric ")) { setError("Select an instance with Fabric installed first."); return; }
+    setSearchingMods(true); setError(""); setNotice("");
+    try { setModResults(await invoke<ModrinthMod[]>("search_modrinth_mods", { instanceId: selected.id, query: modQuery })); }
+    catch (e) { setError(String(e)); }
+    finally { setSearchingMods(false); }
+  }
+
+  async function installMod(projectId: string) {
+    if (!selected || modBusy) return;
+    setModBusy(projectId); setError(""); setNotice("");
+    try { setInstalledMods(await invoke<InstalledMod[]>("install_modrinth_mod", { instanceId: selected.id, projectId })); setNotice("Mod and required dependencies installed and verified."); }
+    catch (e) { setError(String(e)); }
+    finally { setModBusy(""); }
+  }
+
+  async function uninstallMod(projectId: string) {
+    if (!selected || modBusy) return;
+    setModBusy(projectId); setError(""); setNotice("");
+    try { setInstalledMods(await invoke<InstalledMod[]>("uninstall_modrinth_mod", { instanceId: selected.id, projectId })); setNotice("Managed mod removed."); }
+    catch (e) { setError(String(e)); }
+    finally { setModBusy(""); }
+  }
 
   const selected = instances.find((item) => item.id === selectedId);
 
@@ -171,7 +208,7 @@ function App() {
             {launchInspection && <div className="readiness-list"><div><span className={launchInspection.javaRuntime.available && (launchInspection.javaRuntime.major ?? 0) >= launchInspection.requiredJavaMajor ? "status-dot" : "status-dot status-fail"}/>Java runtime<b>{launchInspection.javaRuntime.version ?? "Not found"} · required {launchInspection.requiredJavaMajor}+</b></div><div><span className="status-dot"/>JVM arguments<b>{launchInspection.jvmArgumentCount}</b></div><div><span className="status-dot"/>Game arguments<b>{launchInspection.gameArgumentCount}</b></div><div><span className={launchInspection.unresolvedPlaceholders.length ? "status-dot status-fail" : "status-dot"}/>Unresolved placeholders<b>{launchInspection.unresolvedPlaceholders.length}</b></div><small>{launchInspection.note}</small><details className="argument-preview"><summary>Resolved JVM arguments</summary><pre>{launchInspection.jvmArguments.join("\n") || "None"}</pre></details><details className="argument-preview"><summary>Resolved game arguments</summary><pre>{launchInspection.gameArguments.join("\n") || "None"}</pre></details></div>}
             <p className="hint">Files are downloaded from official Mojang endpoints and checked against SHA-1 hashes and declared sizes.</p>
           </div>
-          <div className="quick-grid"><div className="quick-card"><Blocks/><div><b>Mod manager</b><span>Modrinth integration planned</span></div></div><div className="quick-card"><Monitor/><div><b>Graphics</b><span>Iris, shaders and resource packs</span></div></div></div>
+          <div className="quick-grid"><div className="quick-card"><Blocks/><div><b>Mod manager</b><span>Modrinth · Fabric dependencies</span></div></div><div className="quick-card"><Monitor/><div><b>Graphics</b><span>Iris, shaders and resource packs</span></div></div></div>
         </div>}
         {page === "Instances" && <div className="page">
           <div className="page-heading"><div><div className="eyebrow">YOUR SETUPS</div><h2>Instances</h2><p>Separate vanilla and modded installations. Each instance has its own mods, worlds and settings.</p></div><button className="outline-button" onClick={() => setCreating((v) => !v)}><Plus size={16}/> New instance</button></div>
@@ -193,7 +230,22 @@ function App() {
             </article>)}</div>}
           <button className="refresh-button" onClick={() => void refreshInstances()}><RefreshCw size={14}/> Refresh list</button>
         </div>}
-        {page === "Mods" && <div className="page"><div className="eyebrow">MODRINTH</div><h2>Mods</h2><p>Discover mods and let ComfyCraft resolve their dependencies.</p><div className="empty-state"><Download size={30}/><h3>Mod browser is next</h3><p>Search, compatibility checks, dependency installation and updates are planned.</p></div></div>}
+        {page === "Mods" && <div className="page">
+          <div className="eyebrow">MODRINTH · FABRIC</div><h2>Mods</h2>
+          <p>Search compatible mods for the selected instance. Required dependencies are resolved automatically.</p>
+          <div className="mod-search"><input value={modQuery} onChange={(e) => setModQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void searchMods(); }} placeholder="Search Modrinth…" aria-label="Search Modrinth mods"/><button className="primary-button" onClick={() => void searchMods()} disabled={searchingMods || !selected || !selected.loader.startsWith("Fabric ")}><Download size={15}/>{searchingMods ? "Searching…" : "Search"}</button></div>
+          {!selected ? <div className="empty-state"><Box size={28}/><h3>Select an instance</h3><p>Choose an instance before browsing mods.</p></div> : !selected.loader.startsWith("Fabric ") ? <div className="empty-state"><Blocks size={28}/><h3>Fabric required</h3><p>Install Minecraft and Fabric for {selected.gameVersion} in the Play tab to browse compatible mods.</p></div> : null}
+          {modResults.length > 0 && <div className="mod-list">{modResults.map((mod) => {
+            const isInstalled = installedMods.some((item) => item.projectId === mod.projectId);
+            return <article className="mod-row" key={mod.projectId}>
+              {mod.iconUrl ? <img className="mod-icon" src={mod.iconUrl} alt="" /> : <div className="mod-icon fallback"><Blocks size={20}/></div>}
+              <div className="mod-info"><b>{mod.title}</b><span>by {mod.author} · {mod.downloads.toLocaleString()} downloads</span><p>{mod.description}</p></div>
+              <button className={isInstalled ? "outline-button" : "primary-button"} disabled={Boolean(modBusy)} onClick={() => void (isInstalled ? uninstallMod(mod.projectId) : installMod(mod.projectId))}>{modBusy === mod.projectId ? "Working…" : isInstalled ? "Uninstall" : "Install"}</button>
+            </article>;
+          })}</div>}
+          {modResults.length === 0 && !searchingMods && selected?.loader.startsWith("Fabric ") && <div className="empty-state compact-empty"><Search size={28}/><h3>Find your next mod</h3><p>Search by name or feature. Results are filtered for Minecraft {selected.gameVersion} and Fabric.</p></div>}
+          <div className="installed-mods"><div className="section-kicker">INSTALLED THROUGH COMFYCRAFT</div>{installedMods.length === 0 ? <p className="muted">No managed mods installed yet.</p> : installedMods.map((mod) => <div className="installed-mod-row" key={mod.projectId}><span>{mod.name}</span><small>{mod.filename}</small><button className="text-action" disabled={Boolean(modBusy)} onClick={() => void uninstallMod(mod.projectId)}>{modBusy === mod.projectId ? "Removing…" : "Remove"}</button></div>)}</div>
+        </div>}
         {page === "Settings" && <div className="page"><div className="eyebrow">PREFERENCES</div><h2>Settings</h2><p>ComfyCraft is being designed for Linux desktops.</p><div className="settings-row"><div><b>Target platform</b><span>CachyOS / Arch Linux · Wayland / X11</span></div><strong>Linux only</strong></div><div className="settings-row"><div><b>Graphics testing</b><span>NVIDIA · KDE Plasma · Hyprland</span></div><strong>Planned</strong></div><div className="settings-row"><div><b>Account provider</b><span>Ely.by supported authentication flow</span></div><strong>Planned</strong></div><div className="settings-row"><div><b>Java Runtime</b><span>Detected runtimes · Java 25 recommended for Minecraft 26.3</span></div><button className="text-action" onClick={() => void refreshJavaRuntimes()} disabled={javaLoading}><RefreshCw size={14}/>{javaLoading ? "Scanning…" : "Rescan"}</button></div>{javaRuntimes.length === 0 ? <div className="empty-state"><Monitor size={25}/><h3>No Java runtime detected</h3><p>Install a Linux Java runtime, then rescan. ComfyCraft will not download runtimes from unverified sources.</p></div> : <div className="instance-list">{javaRuntimes.map((runtime) => <article className={runtime.selected ? "instance-row selected" : "instance-row"} key={runtime.executable}><div className="game-icon"><Monitor size={20}/></div><div className="instance-row-info"><b>Java {runtime.major} · {runtime.version}</b><span>{runtime.vendor ?? "Java runtime"} · {runtime.executable}</span></div><strong>{runtime.selected ? "Selected" : runtime.major >= 25 ? "Compatible with 26.3" : "Older runtime"}</strong>{!runtime.selected && <button className="text-action" onClick={async () => { try { setJavaRuntimes(await invoke<JavaRuntime[]>("select_java_runtime", { executable: runtime.executable })); setNotice("Java runtime selection saved."); } catch (e) { setError(String(e)); } }}>Use this</button>}</article>)}</div>}</div>}
       </section>
     </main>
