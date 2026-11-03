@@ -1,6 +1,15 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+use serde_json::Value;
+use sha1::{Digest, Sha1};
+use std::{
+    fs,
+    path::{Component, Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tauri::{AppHandle, Manager};
+
+const MANIFEST_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+const USER_AGENT: &str = "ComfyCraft/0.1.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -10,6 +19,44 @@ struct Instance {
     game_version: String,
     loader: String,
     created_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallResult {
+    version: String,
+    libraries_downloaded: usize,
+    assets_downloaded: usize,
+    already_present: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct VersionManifest {
+    versions: Vec<ManifestVersion>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestVersion {
+    id: String,
+    #[serde(rename = "type")]
+    version_type: String,
+    url: String,
+    sha1: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameVersion {
+    id: String,
+    version_type: String,
+}
+
+#[derive(Clone)]
+struct DownloadTask {
+    url: String,
+    path: PathBuf,
+    sha1: Option<String>,
+    size: Option<u64>,
 }
 
 fn instances_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -23,15 +70,110 @@ fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 80 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-fn read_instance(dir: &PathBuf, id: &str) -> Result<Instance, String> {
+fn read_instance(dir: &Path, id: &str) -> Result<Instance, String> {
     if !valid_id(id) { return Err("Invalid instance identifier".into()); }
     let path = dir.join(id).join("instance.json");
     let data = fs::read_to_string(path).map_err(|e| format!("Cannot read instance: {e}"))?;
     serde_json::from_str(&data).map_err(|e| format!("Invalid instance metadata: {e}"))
 }
 
+fn safe_relative_path(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value);
+    if value.is_empty() || path.components().any(|part| !matches!(part, Component::Normal(_))) {
+        return Err(format!("Unsafe download path: {value}"));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn file_matches(path: &Path, expected_sha1: Option<&str>, expected_size: Option<u64>) -> bool {
+    let Ok(metadata) = fs::metadata(path) else { return false; };
+    if !metadata.is_file() { return false; }
+    if let Some(size) = expected_size {
+        if metadata.len() != size { return false; }
+    }
+    if let Some(hash) = expected_sha1 {
+        let Ok(bytes) = fs::read(path) else { return false; };
+        let actual = format!("{:x}", Sha1::digest(&bytes));
+        if !actual.eq_ignore_ascii_case(hash) { return false; }
+    }
+    true
+}
+
+async fn download_verified(client: &reqwest::Client, task: &DownloadTask) -> Result<bool, String> {
+    if !task.url.starts_with("https://") {
+        return Err(format!("Refusing non-HTTPS download: {}", task.url));
+    }
+    if file_matches(&task.path, task.sha1.as_deref(), task.size) {
+        return Ok(false);
+    }
+    let response = client.get(&task.url).send().await
+        .map_err(|e| format!("Download request failed: {e}"))?
+        .error_for_status().map_err(|e| format!("Download returned an error: {e}"))?;
+    let bytes = response.bytes().await.map_err(|e| format!("Cannot read downloaded file: {e}"))?;
+    if let Some(size) = task.size {
+        if bytes.len() as u64 != size {
+            return Err(format!("Downloaded file has an unexpected size: {}", task.path.display()));
+        }
+    }
+    if let Some(hash) = task.sha1.as_deref() {
+        let actual = format!("{:x}", Sha1::digest(&bytes));
+        if !actual.eq_ignore_ascii_case(hash) {
+            return Err(format!("SHA-1 verification failed: {}", task.path.display()));
+        }
+    }
+    let parent = task.path.parent().ok_or("Download path has no parent directory")?;
+    fs::create_dir_all(parent).map_err(|e| format!("Cannot create download directory: {e}"))?;
+    let temp = task.path.with_extension("comfycraft-part");
+    fs::write(&temp, &bytes).map_err(|e| format!("Cannot write downloaded file: {e}"))?;
+    fs::rename(&temp, &task.path).map_err(|e| format!("Cannot finalize downloaded file: {e}"))?;
+    Ok(true)
+}
+
+async fn download_many(client: &reqwest::Client, tasks: Vec<DownloadTask>) -> Result<(usize, usize), String> {
+    use futures_util::{stream, StreamExt, TryStreamExt};
+    let total = tasks.len();
+    let pending = tasks.into_iter().map(|task| {
+        let client = client.clone();
+        async move { download_verified(&client, &task).await }
+    });
+    let downloaded = stream::iter(pending)
+        .buffer_unordered(10)
+        .try_collect::<Vec<bool>>()
+        .await
+        .map_err(|e| e)?;
+    let fresh = downloaded.iter().filter(|value| **value).count();
+    Ok((fresh, total.saturating_sub(fresh)))
+}
+
+fn rule_allows(library: &Value) -> bool {
+    let Some(rules) = library.get("rules").and_then(Value::as_array) else { return true; };
+    let mut allowed = false;
+    for rule in rules {
+        let os_matches = rule.get("os").and_then(|os| os.get("name")).and_then(Value::as_str)
+            .map(|name| name == "linux").unwrap_or(true);
+        let has_features = rule.get("features").and_then(Value::as_object).map(|o| !o.is_empty()).unwrap_or(false);
+        if os_matches && !has_features {
+            match rule.get("action").and_then(Value::as_str) {
+                Some("allow") => allowed = true,
+                Some("disallow") => allowed = false,
+                _ => {}
+            }
+        }
+    }
+    allowed
+}
+
+fn artifact_task(base: &Path, artifact: &Value) -> Result<DownloadTask, String> {
+    let relative = artifact.get("path").and_then(Value::as_str).ok_or("Artifact is missing its path")?;
+    let path = base.join("libraries").join(safe_relative_path(relative)?);
+    let url = artifact.get("url").and_then(Value::as_str).ok_or("Artifact is missing its URL")?.to_string();
+    let sha1 = artifact.get("sha1").and_then(Value::as_str).map(str::to_string);
+    let size = artifact.get("size").and_then(Value::as_u64);
+    Ok(DownloadTask { url, path, sha1, size })
+}
+
 #[tauri::command]
-fn get_app_info() -> serde_json::Value {
+fn get_app_info() -> Value {
     serde_json::json!({
         "name": "ComfyCraft",
         "version": env!("CARGO_PKG_VERSION"),
@@ -40,59 +182,163 @@ fn get_app_info() -> serde_json::Value {
     })
 }
 
-#[derive(Debug, Deserialize)]
-struct VersionManifest {
-    versions: Vec<ManifestVersion>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ManifestVersion {
-    id: String,
-    #[serde(rename = "type")]
-    version_type: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GameVersion {
-    id: String,
-    version_type: String,
+#[tauri::command]
+async fn list_game_versions() -> Result<Vec<GameVersion>, String> {
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).build().map_err(|e| e.to_string())?;
+    let manifest: VersionManifest = client.get(MANIFEST_URL).send().await
+        .map_err(|e| format!("Cannot download Minecraft version manifest: {e}"))?
+        .error_for_status().map_err(|e| format!("Minecraft version manifest request failed: {e}"))?
+        .json().await.map_err(|e| format!("Cannot parse Minecraft version manifest: {e}"))?;
+    Ok(manifest.versions.into_iter()
+        .filter(|version| version.version_type == "release")
+        .map(|version| GameVersion { id: version.id, version_type: version.version_type })
+        .collect())
 }
 
 #[tauri::command]
-async fn list_game_versions() -> Result<Vec<GameVersion>, String> {
-    let response = reqwest::Client::new()
-        .get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
-        .header(reqwest::header::USER_AGENT, "ComfyCraft/0.1.0")
-        .send()
-        .await
+async fn install_game(app: AppHandle, instance_id: String) -> Result<InstallResult, String> {
+    let root = instances_dir(&app)?;
+    let instance = read_instance(&root, &instance_id)?;
+    let game_dir = root.join(&instance_id).join("game");
+    fs::create_dir_all(&game_dir).map_err(|e| format!("Cannot create game directory: {e}"))?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).build().map_err(|e| e.to_string())?;
+
+    let manifest: VersionManifest = client.get(MANIFEST_URL).send().await
         .map_err(|e| format!("Cannot download Minecraft version manifest: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("Minecraft version manifest request failed: {e}"))?;
+        .error_for_status().map_err(|e| format!("Minecraft version manifest request failed: {e}"))?
+        .json().await.map_err(|e| format!("Cannot parse Minecraft version manifest: {e}"))?;
+    let version_entry = manifest.versions.iter().find(|v| v.id == instance.game_version)
+        .ok_or_else(|| format!("Minecraft version {} is no longer present in the official manifest", instance.game_version))?;
+    let metadata_response = client.get(&version_entry.url).send().await
+        .map_err(|e| format!("Cannot download version metadata: {e}"))?
+        .error_for_status().map_err(|e| format!("Version metadata request failed: {e}"))?;
+    let metadata_bytes = metadata_response.bytes().await.map_err(|e| format!("Cannot read version metadata: {e}"))?;
+    let metadata_hash = format!("{:x}", Sha1::digest(&metadata_bytes));
+    if !metadata_hash.eq_ignore_ascii_case(&version_entry.sha1) {
+        return Err("Minecraft version metadata failed SHA-1 verification".into());
+    }
+    let metadata: Value = serde_json::from_slice(&metadata_bytes).map_err(|e| format!("Invalid version metadata: {e}"))?;
+    let versions_dir = game_dir.join("versions").join(&instance.game_version);
+    fs::create_dir_all(&versions_dir).map_err(|e| e.to_string())?;
+    fs::write(versions_dir.join(format!("{}.json", instance.game_version)), &metadata_bytes)
+        .map_err(|e| format!("Cannot save version metadata: {e}"))?;
 
-    let manifest: VersionManifest = response
-        .json()
-        .await
-        .map_err(|e| format!("Cannot parse Minecraft version manifest: {e}"))?;
+    let client_download = metadata.get("downloads").and_then(|v| v.get("client"))
+        .ok_or("Official version metadata does not contain a client download")?;
+    let client_task = DownloadTask {
+        url: client_download.get("url").and_then(Value::as_str).ok_or("Client download URL is missing")?.to_string(),
+        path: versions_dir.join(format!("{}.jar", instance.game_version)),
+        sha1: client_download.get("sha1").and_then(Value::as_str).map(str::to_string),
+        size: client_download.get("size").and_then(Value::as_u64),
+    };
+    download_verified(&client, &client_task).await?;
 
-    Ok(manifest.versions.into_iter()
-        .filter(|version| version.version_type == "release")
-        .map(|version| GameVersion {
-            id: version.id,
-            version_type: version.version_type,
-        })
-        .collect())
+    let mut library_tasks = Vec::new();
+    if let Some(libraries) = metadata.get("libraries").and_then(Value::as_array) {
+        for library in libraries {
+            if !rule_allows(library) { continue; }
+            if let Some(artifact) = library.get("downloads").and_then(|v| v.get("artifact")) {
+                library_tasks.push(artifact_task(&game_dir, artifact)?);
+            }
+            if let (Some(natives), Some(classifiers)) = (
+                library.get("natives").and_then(|v| v.get("linux")).and_then(Value::as_str),
+                library.get("downloads").and_then(|v| v.get("classifiers")).and_then(Value::as_object),
+            ) {
+                let classifier_key = natives.replace("${arch}", if std::env::consts::ARCH == "x86_64" { "64" } else { "32" });
+                if let Some(classifier) = classifiers.get(&classifier_key) {
+                    library_tasks.push(artifact_task(&game_dir, classifier)?);
+                }
+            }
+        }
+    }
+    let (libraries_downloaded, libraries_existing) = download_many(&client, library_tasks).await?;
+
+    let mut assets_downloaded = 0usize;
+    let mut assets_existing = 0usize;
+    if let Some(asset_index) = metadata.get("assetIndex") {
+        let index_id = asset_index.get("id").and_then(Value::as_str).ok_or("Asset index ID is missing")?;
+        let index_url = asset_index.get("url").and_then(Value::as_str).ok_or("Asset index URL is missing")?;
+        let index_path = game_dir.join("assets").join("indexes").join(format!("{index_id}.json"));
+        let index_task = DownloadTask {
+            url: index_url.to_string(),
+            path: index_path.clone(),
+            sha1: asset_index.get("sha1").and_then(Value::as_str).map(str::to_string),
+            size: asset_index.get("size").and_then(Value::as_u64),
+        };
+        download_verified(&client, &index_task).await?;
+        let index: Value = serde_json::from_slice(&fs::read(&index_path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("Cannot parse asset index: {e}"))?;
+        let mut asset_tasks = Vec::new();
+        if let Some(objects) = index.get("objects").and_then(Value::as_object) {
+            for object in objects.values() {
+                let hash = object.get("hash").and_then(Value::as_str).ok_or("Asset object hash is missing")?;
+                if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err("Asset index contains an invalid SHA-1 hash".into());
+                }
+                let size = object.get("size").and_then(Value::as_u64);
+                let relative = format!("{}/{}", &hash[..2], hash);
+                let path = game_dir.join("assets").join("objects").join(safe_relative_path(&relative)?);
+                asset_tasks.push(DownloadTask {
+                    url: format!("https://resources.download.minecraft.net/{relative}"),
+                    path,
+                    sha1: Some(hash.to_string()),
+                    size,
+                });
+            }
+        }
+        let (fresh, existing) = download_many(&client, asset_tasks).await?;
+        assets_downloaded = fresh;
+        assets_existing = existing;
+    }
+
+    if let Some(logging) = metadata.get("logging").and_then(|v| v.get("client")).and_then(|v| v.get("file")) {
+        if let (Some(url), Some(id)) = (logging.get("url").and_then(Value::as_str), logging.get("id").and_then(Value::as_str)) {
+            let task = DownloadTask {
+                url: url.to_string(),
+                path: game_dir.join("assets").join("log_configs").join(safe_relative_path(id)?),
+                sha1: logging.get("sha1").and_then(Value::as_str).map(str::to_string),
+                size: logging.get("size").and_then(Value::as_u64),
+            };
+            download_verified(&client, &task).await?;
+        }
+    }
+
+    let marker = serde_json::json!({
+        "version": instance.game_version,
+        "installedAt": SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs(),
+        "verified": true
+    });
+    fs::write(root.join(&instance_id).join("installation.json"), serde_json::to_vec_pretty(&marker).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Cannot save installation marker: {e}"))?;
+
+    Ok(InstallResult {
+        version: instance.game_version,
+        libraries_downloaded,
+        assets_downloaded,
+        already_present: libraries_existing + assets_existing,
+    })
+}
+
+#[tauri::command]
+fn is_game_installed(app: AppHandle, instance_id: String) -> Result<bool, String> {
+    let root = instances_dir(&app)?;
+    let instance = read_instance(&root, &instance_id)?;
+    let marker_path = root.join(&instance_id).join("installation.json");
+    let Ok(data) = fs::read_to_string(marker_path) else { return Ok(false); };
+    let Ok(marker) = serde_json::from_str::<Value>(&data) else { return Ok(false); };
+    Ok(marker.get("version").and_then(Value::as_str) == Some(instance.game_version.as_str())
+        && marker.get("verified").and_then(Value::as_bool) == Some(true))
 }
 
 #[tauri::command]
 fn list_instances(app: AppHandle) -> Result<Vec<Instance>, String> {
     let dir = instances_dir(&app)?;
     let mut instances = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|e| format!("Cannot list instances: {e}"))? {
+    for entry in fs::read_dir(&dir).map_err(|e| format!("Cannot list instances: {e}"))? {
         let entry = entry.map_err(|e| e.to_string())?;
         if !entry.file_type().map_err(|e| e.to_string())?.is_dir() { continue; }
         let id = entry.file_name().to_string_lossy().into_owned();
-        if let Ok(instance) = read_instance(&instances_dir(&app)?, &id) { instances.push(instance); }
+        if let Ok(instance) = read_instance(&dir, &id) { instances.push(instance); }
     }
     instances.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(instances)
@@ -149,7 +395,10 @@ fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_app_info, list_game_versions, list_instances, create_instance, rename_instance, delete_instance])
+        .invoke_handler(tauri::generate_handler![
+            get_app_info, list_game_versions, install_game, is_game_installed,
+            list_instances, create_instance, rename_instance, delete_instance
+        ])
         .run(tauri::generate_context!())
         .expect("error while running ComfyCraft");
 }
