@@ -767,7 +767,12 @@ fn inspect_launch_arguments(app: AppHandle, instance_id: String) -> Result<Value
             value
         }).collect()
     };
-    let jvm = expand(jvm, &mut unresolved);
+    let mut jvm = expand(jvm, &mut unresolved);
+    // Minecraft 26.3 reads max.bg.threads when sizing Util.backgroundExecutor.
+    // Remove any pre-existing value so ComfyCraft supplies exactly one setting.
+    jvm.retain(|argument| !argument.starts_with("-Dmax.bg.threads="));
+    let multicore_plan = multicore::build_plan("balanced")?;
+    jvm.extend(multicore_plan.jvm_arguments.iter().cloned());
     let game = expand(game, &mut unresolved);
     let required_java_major = metadata.get("javaVersion").and_then(|v| v.get("majorVersion"))
         .and_then(Value::as_u64).unwrap_or(25);
@@ -780,6 +785,7 @@ fn inspect_launch_arguments(app: AppHandle, instance_id: String) -> Result<Value
         "gameArgumentCount": game.len(),
         "jvmArguments": jvm,
         "gameArguments": game,
+        "multicore": multicore_plan,
         "unresolvedPlaceholders": unresolved,
         "authenticationRequired": true,
         "launchEnabled": false,
