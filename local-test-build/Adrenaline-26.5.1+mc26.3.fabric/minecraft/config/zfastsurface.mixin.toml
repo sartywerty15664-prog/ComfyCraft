@@ -1,0 +1,13 @@
+	[mixin.perf]
+		#Replace buildSurface with optimized implementation
+		# defaultValue: true
+		# incompatibleWith: biolith
+		#
+		surface = true
+
+	[perf.surface]
+		#Skip trivial surface builder. Major speedup for end dimension. Depends on surface builder
+		# (depends on surface builder mixin)
+		# defaultValue: true
+		#
+		trivial = true

@@ -1,0 +1,31 @@
+	[mixin.perf]
+		#Replace populateNoise with optimized implementation
+		# defaultValue: true
+		#
+		noise = true
+		#Replace populateBiomes with optimized implementation
+		# defaultValue: true
+		#
+		biome = true
+
+	[mixin.debug]
+		#Disable carve, features and entites chunk generation step
+		# defaultValue: false
+		#
+		disable_carve_features_and_entities = false
+
+	[perf.biomes]
+		#Optimize biome tree by avoiding multiple calls to thread local
+		# defaultValue: false
+		# incompatibleWith: biolith
+		#
+		tree = false
+		#Optimize end biome generation (2x speed) but may cause mod incompatibility
+		# defaultValue: true
+		# incompatibleWith: biolith
+		#
+		end = true
+		#Optimize single biome generation (major speedup) but may cause mod incompatibility
+		# defaultValue: true
+		#
+		fixed = true

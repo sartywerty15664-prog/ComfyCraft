@@ -1,0 +1,7 @@
+config/modpack_defaults/config/modmenu.json
+config/modpack_defaults/config/vmp.properties
+config/modpack_defaults/config/modernfix-mixins.properties
+config/modpack_defaults/config/crash_assistant/config.toml
+config/modpack_defaults/config/ferritecore.mixin.properties
+config/modpack_defaults/config/dynamic_fps.json
+config/modpack_defaults/options.txt
