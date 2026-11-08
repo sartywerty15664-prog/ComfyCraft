@@ -12,6 +12,7 @@ type ModrinthMod = { projectId: string; slug: string; title: string; description
 type InstalledMod = { projectId: string; versionId: string; name: string; filename: string; sha1: string; active: boolean };
 type ModUpdate = { projectId: string; currentVersionId: string; latestVersionId: string; latestName: string };
 type ContentType = "mod" | "resourcepack" | "shader";
+type AssetRepairResult = { indexId: string; downloaded: number; alreadyValid: number; total: number; status: string };
 type AssetVerification = { indexId: string; total: number; verified: number; missing: number; corrupt: number; bytesVerified: number; workersUsed: number; elapsedMs: number; problemSamples: string[] };
 type LaunchInspection = { version: string; requiredJavaMajor: number; javaRuntime: { available: boolean; version?: string; major?: number }; jvmArgumentCount: number; gameArgumentCount: number; jvmArguments: string[]; gameArguments: string[]; unresolvedPlaceholders: string[]; authenticationRequired: boolean; launchEnabled: boolean; note: string };
 const nav: { label: Page; icon: typeof Gamepad2 }[] = [
@@ -39,6 +40,7 @@ function App() {
   const [installed, setInstalled] = useState(false);
   const [checkingLaunch, setCheckingLaunch] = useState(false);
   const [verifyingAssets, setVerifyingAssets] = useState(false);
+  const [repairingAssets, setRepairingAssets] = useState(false);
   const [assetVerification, setAssetVerification] = useState<AssetVerification | null>(null);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [launchInspection, setLaunchInspection] = useState<LaunchInspection | null>(null);
@@ -193,6 +195,17 @@ function App() {
     finally { setVerifyingAssets(false); }
   }
 
+  async function repairAssets() {
+    if (!selected || repairingAssets) return;
+    setRepairingAssets(true); setError(""); setNotice("");
+    try {
+      const result = await invoke<AssetRepairResult>("repair_asset_cache", { instanceId: selected.id });
+      setAssetVerification(null);
+      setNotice(`Asset cache repaired: ${result.downloaded.toLocaleString()} downloaded, ${result.alreadyValid.toLocaleString()} already valid.`);
+    } catch (e) { setError(String(e)); }
+    finally { setRepairingAssets(false); }
+  }
+
   async function installFabric() {
     if (!selected || installingFabric || !installed) return;
     setInstallingFabric(true); setError(""); setNotice("");
@@ -261,6 +274,7 @@ function App() {
               finally { setCheckingLaunch(false); }
             }}><RefreshCw size={15}/>{checkingLaunch ? "CHECKING…" : "CHECK LAUNCH READINESS"}</button>}
                          {installed && <button className="outline-button readiness-button" disabled={verifyingAssets || installing} onClick={() => void verifyAssets()}><RefreshCw size={15}/>{verifyingAssets ? "VERIFYING ASSETS…" : "VERIFY ASSET CACHE"}<span>Parallel SHA-1 verification · Rust workers</span></button>}
+                          {installed && <button className="outline-button readiness-button" disabled={repairingAssets || installing} onClick={() => void repairAssets()}><Download size={15}/>{repairingAssets ? "REPAIRING ASSETS…" : "REPAIR ASSET CACHE"}<span>Download missing / damaged objects · SHA-1 verified</span></button>}
              {assetVerification && <div className="readiness-list"><div><span className={assetVerification.missing === 0 && assetVerification.corrupt === 0 ? "status-dot" : "status-dot status-fail"}/>Asset objects<b>{assetVerification.verified.toLocaleString()} / {assetVerification.total.toLocaleString()}</b></div><div><span className="status-dot"/>Rust workers<b>{assetVerification.workersUsed}</b></div><div><span className={assetVerification.missing || assetVerification.corrupt ? "status-dot status-fail" : "status-dot"}/>Missing / corrupt<b>{assetVerification.missing} / {assetVerification.corrupt}</b></div><small>{(assetVerification.bytesVerified / 1024 / 1024).toFixed(1)} MiB verified in {assetVerification.elapsedMs} ms · index {assetVerification.indexId}</small>{assetVerification.problemSamples.length > 0 && <details className="argument-preview"><summary>Verification issues</summary><pre>{assetVerification.problemSamples.join("\n")}</pre></details>}</div>}
              {readiness && <div className="readiness-list">{readiness.checks.map((check) => <div key={check.id}><span className={check.ok ? "status-dot" : "status-dot status-fail"}/>{check.label}<b>{check.ok ? "OK" : "MISSING"}</b></div>)}<small>{readiness.authentication}</small></div>}
             {launchInspection && <div className="readiness-list"><div><span className={launchInspection.javaRuntime.available && (launchInspection.javaRuntime.major ?? 0) >= launchInspection.requiredJavaMajor ? "status-dot" : "status-dot status-fail"}/>Java runtime<b>{launchInspection.javaRuntime.version ?? "Not found"} · required {launchInspection.requiredJavaMajor}+</b></div><div><span className="status-dot"/>JVM arguments<b>{launchInspection.jvmArgumentCount}</b></div><div><span className="status-dot"/>Game arguments<b>{launchInspection.gameArgumentCount}</b></div><div><span className={launchInspection.unresolvedPlaceholders.length ? "status-dot status-fail" : "status-dot"}/>Unresolved placeholders<b>{launchInspection.unresolvedPlaceholders.length}</b></div><small>{launchInspection.note}</small><details className="argument-preview"><summary>Resolved JVM arguments</summary><pre>{launchInspection.jvmArguments.join("\n") || "None"}</pre></details><details className="argument-preview"><summary>Resolved game arguments</summary><pre>{launchInspection.gameArguments.join("\n") || "None"}</pre></details></div>}
