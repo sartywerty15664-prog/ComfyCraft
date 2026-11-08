@@ -50,6 +50,7 @@ export class OAuthSession {
       if (typeof body.state !== "string" || body.state.length < 32 || body.state.length > 256) return json({ error: "invalid_state" }, 400);
       await this.state!.storage.put("expected_state", body.state);
       await this.state!.storage.put("created_at", Date.now());
+      await this.state!.storage.setAlarm(Date.now() + 10 * 60_000);
       return json({ ok: true });
     }
     if (request.method === "POST" && url.pathname === "/complete") {
@@ -64,14 +65,21 @@ export class OAuthSession {
       return json({ ok: true });
     }
     if (request.method === "GET" && url.pathname === "/poll") {
+      if (await this.state!.storage.get<boolean>("consumed")) return json({ status: "consumed" }, 410);
       const created = await this.state!.storage.get<number>("created_at");
       if (!created || Date.now() - created > 10 * 60_000) return json({ status: "expired" }, 410);
       const result = await this.state!.storage.get<TokenResponse & { account: AccountInfo }>("result");
       if (!result) return json({ status: "pending" }, 202);
-      await this.state!.storage.deleteAll();
+      await this.state!.storage.put("consumed", true);
+      await this.state!.storage.delete("result");
+      await this.state!.storage.delete("expected_state");
       return json({ status: "complete", ...result });
     }
     return json({ error: "not_found" }, 404);
+  }
+
+  async alarm(): Promise<void> {
+    await this.state!.storage.deleteAll();
   }
 }
 
