@@ -115,7 +115,7 @@ pub fn verify_asset_cache(app: AppHandle, instance_id: String) -> Result<AssetVe
                     Ok(_) => match fs::read(path) {
                         Ok(bytes) => {
                             let actual = format!("{:x}", Sha1::digest(&bytes));
-                            if actual == *expected_hash {
+                            if actual == expected_hash.as_str() {
                                 verified.fetch_add(1, Ordering::Relaxed);
                                 bytes_verified.fetch_add(bytes.len() as u64, Ordering::Relaxed);
                             } else {
