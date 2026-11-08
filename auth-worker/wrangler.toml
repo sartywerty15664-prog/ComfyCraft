@@ -11,5 +11,6 @@ tag = "v1"
 new_sqlite_classes = ["OAuthSession"]
 
 [vars]
-# Set ELY_CLIENT_ID and ELY_REDIRECT_URI with wrangler secret/vars commands.
-# ELY_CLIENT_SECRET must be stored as a Wrangler secret, never committed.
+ELY_REDIRECT_URI = "https://comfycraft-ely-auth.sartywerty15664.workers.dev/v1/auth/callback"
+# Set ELY_CLIENT_ID as a non-secret Worker variable after creating the Ely.by application.
+# ELY_CLIENT_SECRET must be stored as a Worker secret, never committed.
