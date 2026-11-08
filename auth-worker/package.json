@@ -1,0 +1,14 @@
+{
+  "name": "comfycraft-ely-auth",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dry-run": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20261108.0",
+    "typescript": "^5.6.3",
+    "wrangler": "^4.45.0"
+  }
+}
