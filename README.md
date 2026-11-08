@@ -1,5 +1,7 @@
 # ComfyCraft
 
+**Latest Linux preview:** [Download the newest ComfyCraft AppImage](https://github.com/sartywerty15664-prog/ComfyCraft/releases/tag/preview) · [All releases](https://github.com/sartywerty15664-prog/ComfyCraft/releases)
+
 A Linux-only Minecraft Java launcher focused on comfortable instance management, verified game downloads, Fabric mods, resource packs and shader packs.
 
 > Early development. The launcher can prepare isolated instances and install game files, Fabric and compatible Modrinth content. Authenticated game launching is not yet enabled.
