@@ -33,12 +33,12 @@ jobs:
         run: pnpm install --no-frozen-lockfile
       - name: Build frontend
         run: pnpm build
+      - name: Prepare square AppImage icon
+        run: convert src-tauri/icons/icon.png -resize 512x512 -background none -gravity center -extent 512x512 src-tauri/icons/appimage.png
       - name: Check Rust backend
         run: cargo check --manifest-path src-tauri/Cargo.toml
       - name: Run Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
-      - name: Prepare square AppImage icon
-        run: convert src-tauri/icons/icon.png -resize 512x512 -background none -gravity center -extent 512x512 src-tauri/icons/appimage.png
       - name: Build Linux AppImage
         run: pnpm tauri build --bundles appimage
       - name: Upload Linux AppImage preview
