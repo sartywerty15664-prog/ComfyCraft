@@ -1404,7 +1404,7 @@ fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_app_info, get_multicore_plan, verify_asset_cache, list_game_versions, list_java_runtimes, select_java_runtime, install_game, install_fabric, search_modrinth_mods, install_modrinth_mod, list_installed_mods, uninstall_modrinth_mod, check_mod_updates, search_modrinth_content, list_installed_content, install_modrinth_content, uninstall_modrinth_content, set_modrinth_content_enabled, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
+            get_app_info, get_multicore_plan, assets::verify_asset_cache, list_game_versions, list_java_runtimes, select_java_runtime, install_game, install_fabric, search_modrinth_mods, install_modrinth_mod, list_installed_mods, uninstall_modrinth_mod, check_mod_updates, search_modrinth_content, list_installed_content, install_modrinth_content, uninstall_modrinth_content, set_modrinth_content_enabled, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
             list_instances, create_instance, rename_instance, delete_instance
         ])
         .run(tauri::generate_context!())
