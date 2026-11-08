@@ -68,3 +68,25 @@ jobs:
         with:
           generate_release_notes: true
           files: release-assets/*.AppImage
+
+  publish-preview:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/multicore-runtime'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: ComfyCraft-Linux-AppImage
+          path: release-assets
+      - name: Update rolling preview release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: preview
+          target_commitish: ${{ github.sha }}
+          name: ComfyCraft Preview
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          generate_release_notes: true
+          files: release-assets/*.AppImage
