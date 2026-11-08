@@ -148,6 +148,62 @@ pub fn verify_asset_cache(app: AppHandle, instance_id: String) -> Result<AssetVe
     })
 }
 
+/// Repair missing or damaged asset objects from Mojang's content-addressed
+/// resource endpoint. Downloads are bounded-concurrent and SHA-1 verified
+/// by the shared Rust downloader before an object is atomically installed.
+#[tauri::command]
+pub async fn repair_asset_cache(app: AppHandle, instance_id: String) -> Result<serde_json::Value, String> {
+    let root = super::instances_dir(&app)?;
+    let instance = super::read_instance(&root, &instance_id)?;
+    let game_dir = root.join(&instance_id).join("game");
+    let metadata_path = game_dir
+        .join("versions")
+        .join(&instance.game_version)
+        .join(format!("{}.json", instance.game_version));
+    let metadata: Value = serde_json::from_slice(
+        &fs::read(&metadata_path).map_err(|e| format!("Cannot read game metadata: {e}"))?
+    ).map_err(|e| format!("Cannot parse game metadata: {e}"))?;
+    let index_id = metadata.get("assetIndex").and_then(|v| v.get("id"))
+        .and_then(Value::as_str).ok_or("Game metadata does not declare an asset index")?;
+    if index_id.is_empty() || index_id.len() > 32 || !index_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return Err("Asset index identifier is unsafe".into());
+    }
+    let index_path = game_dir.join("assets").join("indexes").join(format!("{index_id}.json"));
+    let index: Value = serde_json::from_slice(
+        &fs::read(&index_path).map_err(|e| format!("Cannot read asset index {index_id}: {e}"))?
+    ).map_err(|e| format!("Asset index is invalid JSON: {e}"))?;
+    let objects = index.get("objects").and_then(Value::as_object)
+        .ok_or("Asset index does not contain an objects map")?;
+    let mut tasks = Vec::with_capacity(objects.len());
+    for (logical_name, object) in objects {
+        let hash = object.get("hash").and_then(Value::as_str)
+            .ok_or_else(|| format!("Asset object {logical_name} has no hash"))?;
+        if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(format!("Asset object {logical_name} has an invalid SHA-1 hash"));
+        }
+        let size = object.get("size").and_then(Value::as_u64)
+            .ok_or_else(|| format!("Asset object {logical_name} has no valid size"))?;
+        let relative = format!("{}/{}", &hash[..2], hash);
+        let path = game_dir.join("assets").join("objects").join(super::safe_relative_path(&relative)?);
+        tasks.push(super::DownloadTask {
+            url: format!("https://resources.download.minecraft.net/{relative}"),
+            path,
+            sha1: Some(hash.to_ascii_lowercase()),
+            size: Some(size),
+        });
+    }
+    let client = reqwest::Client::builder().user_agent("ComfyCraft/0.1.0")
+        .build().map_err(|e| format!("Cannot initialize asset downloader: {e}"))?;
+    let (downloaded, already_valid) = super::download_many(&client, tasks).await?;
+    Ok(serde_json::json!({
+        "indexId": index_id,
+        "downloaded": downloaded,
+        "alreadyValid": already_valid,
+        "total": objects.len(),
+        "status": "verified"
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
