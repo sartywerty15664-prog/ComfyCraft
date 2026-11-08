@@ -8,6 +8,8 @@
 - Verifies independent object files concurrently using a bounded pool of up to 16 native worker threads.
 - Returns totals, missing/corrupt counts, verified bytes, worker count, elapsed time, and a small diagnostic sample.
 - Exposes the verifier to the Play screen through the `VERIFY ASSET CACHE` action.
+- Adds one-click asset repair from Mojang's content-addressed endpoint; missing or corrupt objects are downloaded concurrently and verified against their declared SHA-1 and size before atomic installation.
+- Exposes repair through the `REPAIR ASSET CACHE` action.
 
 ## Thread-safety boundary
 
@@ -15,8 +17,7 @@ The worker pool only reads immutable files and computes hashes. It does not acce
 
 ## Next implementation stages
 
-1. Add repair/download for missing or corrupt asset objects using the index's official object URL and SHA-1.
-2. Build a metadata-driven launch plan that merges vanilla 26.3 and Fabric 0.19.5 libraries without bundling unrelated versions.
+1. Build a metadata-driven launch plan that merges vanilla 26.3 and Fabric 0.19.5 libraries without bundling unrelated versions.
 3. Add a process supervisor that starts Java with an argument vector (never a shell command string), streams logs, tracks exit status, and supports graceful shutdown.
 4. Implement Ely.by authentication only through a supported public-client/native flow or a trusted server-side exchange. Never embed a client secret in the desktop binary or store passwords in plaintext.
 5. Profile the actual 26.3 runtime before making engine-level concurrency patches. Preserve render-thread and world-thread ownership, and benchmark p50/p95/p99 frame times and chunk throughput.
