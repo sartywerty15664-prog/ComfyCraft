@@ -1,8 +1,8 @@
-name: Linux checks
+name: Linux checks and AppImage
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/multicore-runtime]
   pull_request:
     branches: [main]
 
@@ -20,7 +20,7 @@ jobs:
       - name: Install Linux desktop dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev libwebkit2gtk-4.1-dev libfuse2t64
       - name: Validate Ely.by OAuth worker
         working-directory: auth-worker
         run: |
@@ -37,12 +37,12 @@ jobs:
         run: cargo check --manifest-path src-tauri/Cargo.toml
       - name: Run Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
-      - name: Build Linux desktop package
-        run: pnpm tauri build --bundles deb
-      - name: Upload Linux preview package
+      - name: Build Linux AppImage
+        run: pnpm tauri build --bundles appimage
+      - name: Upload Linux AppImage preview
         uses: actions/upload-artifact@v4
         with:
-          name: ComfyCraft-linux-deb
-          path: src-tauri/target/release/bundle/deb/*.deb
+          name: ComfyCraft-Linux-AppImage
+          path: src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
           retention-days: 14
