@@ -37,3 +37,12 @@ jobs:
         run: cargo check --manifest-path src-tauri/Cargo.toml
       - name: Run Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build Linux desktop package
+        run: pnpm tauri build --bundles deb
+      - name: Upload Linux preview package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ComfyCraft-linux-deb
+          path: src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
+          retention-days: 14
