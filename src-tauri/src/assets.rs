@@ -161,8 +161,10 @@ mod tests {
 
     #[test]
     fn rejects_path_like_asset_index_ids() {
-        for value in ["../34", "34/evil", "", "a".repeat(33).as_str()] {
-            assert!(!value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') || value.is_empty() || value.len() > 32);
+        for value in ["../34", "34/evil", ""] {
+            assert!(value.is_empty() || value.len() > 32 || !value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
         }
+        let oversized = "a".repeat(33);
+        assert!(oversized.len() > 32);
     }
 }
