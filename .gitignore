@@ -7,3 +7,8 @@ src-tauri/gen/
 !.env.example
 *.log
 .DS_Store
+
+# Local Minecraft runtime data and test instances (never commit game caches)
+/assets/
+/meta/
+/local-test-build/

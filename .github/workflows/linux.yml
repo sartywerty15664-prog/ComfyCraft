@@ -1,10 +1,14 @@
-name: Linux checks
+name: Linux checks and AppImage
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/multicore-runtime]
+    tags: ["v*"]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -20,14 +24,69 @@ jobs:
       - name: Install Linux desktop dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev libwebkit2gtk-4.1-dev libfuse2t64 imagemagick
+      - name: Validate Ely.by OAuth worker
+        working-directory: auth-worker
+        run: |
+          npm install
+          npm run typecheck
+          npm run dry-run
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Install frontend dependencies
         run: pnpm install --no-frozen-lockfile
       - name: Build frontend
         run: pnpm build
+      - name: Prepare square AppImage icon
+        run: convert src-tauri/icons/icon.png -resize 512x512 -background none -gravity center -extent 512x512 -alpha on -type TrueColorAlpha PNG32:src-tauri/icons/appimage.png
       - name: Check Rust backend
         run: cargo check --manifest-path src-tauri/Cargo.toml
       - name: Run Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build Linux AppImage
+        run: pnpm tauri build --bundles appimage
+      - name: Upload Linux AppImage preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: ComfyCraft-Linux-AppImage
+          path: src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: ComfyCraft-Linux-AppImage
+          path: release-assets
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/*.AppImage
+
+  publish-preview:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/multicore-runtime'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: ComfyCraft-Linux-AppImage
+          path: release-assets
+      - name: Update rolling preview release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: preview
+          target_commitish: ${{ github.sha }}
+          name: ComfyCraft Preview
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          generate_release_notes: true
+          files: release-assets/*.AppImage
