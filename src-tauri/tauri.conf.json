@@ -35,6 +35,6 @@
     "category": "Game",
     "shortDescription": "A comfortable Minecraft Java launcher for Linux",
     "longDescription": "A Linux-only Minecraft Java launcher with instance, mod, shader and performance management.",
-    "icon": []
+    "icon": ["icons/appimage.png"]
   }
 }

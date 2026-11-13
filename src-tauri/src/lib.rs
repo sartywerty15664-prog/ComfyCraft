@@ -8,6 +8,9 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
+mod multicore;
+mod assets;
+
 const MANIFEST_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 const USER_AGENT: &str = "ComfyCraft/0.1.0";
 
@@ -108,13 +111,27 @@ async fn download_verified(client: &reqwest::Client, task: &DownloadTask) -> Res
     if file_matches(&task.path, task.sha1.as_deref(), task.size) {
         return Ok(false);
     }
-    let response = client.get(&task.url).send().await
-        .map_err(|e| format!("Download request failed: {e}"))?
-        .error_for_status().map_err(|e| format!("Download returned an error: {e}"))?;
-    let bytes = response.bytes().await.map_err(|e| format!("Cannot read downloaded file: {e}"))?;
+    let mut last_error = String::from("unknown download error");
+    let mut bytes = None;
+    for attempt in 0..4 {
+        match client.get(&task.url).send().await {
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => match response.bytes().await {
+                    Ok(body) => { bytes = Some(body); break; }
+                    Err(error) => last_error = format!("Cannot read downloaded file: {error}"),
+                },
+                Err(error) => last_error = format!("Download returned an HTTP error: {error}"),
+            },
+            Err(error) => last_error = format!("Download request failed: {error}"),
+        }
+        if attempt < 3 {
+            tokio::time::sleep(std::time::Duration::from_millis(500 * (1u64 << attempt))).await;
+        }
+    }
+    let bytes = bytes.ok_or_else(|| format!("{last_error}; URL: {}", task.url))?;
     if let Some(size) = task.size {
         if bytes.len() as u64 != size {
-            return Err(format!("Downloaded file has an unexpected size: {}", task.path.display()));
+            return Err(format!("Downloaded file has an unexpected size: {} (expected {size}, got {})", task.path.display(), bytes.len()));
         }
     }
     if let Some(hash) = task.sha1.as_deref() {
@@ -317,8 +334,27 @@ fn selected_java_path(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn java_runtimes_for_app(app: &AppHandle) -> Vec<JavaRuntime> {
-    let selected = selected_java_path(app).and_then(|path| fs::canonicalize(path).ok());
+    let selected_path = selected_java_path(app);
+    let selected = selected_path.as_ref().and_then(|path| fs::canonicalize(path).ok());
     let mut runtimes = detect_java_runtimes();
+    if let Some(path) = selected_path {
+        if let Ok(canonical) = fs::canonicalize(&path) {
+            if !runtimes.iter().any(|runtime| Path::new(&runtime.executable) == canonical) {
+                if let Ok(output) = std::process::Command::new(&canonical).arg("-version").output() {
+                    let text = format!("{}{}", String::from_utf8_lossy(&output.stderr), String::from_utf8_lossy(&output.stdout));
+                    if let Some((version, major)) = parse_java_version(&text) {
+                        runtimes.push(JavaRuntime {
+                            executable: canonical.to_string_lossy().into_owned(),
+                            version,
+                            major,
+                            vendor: text.lines().next().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string),
+                            selected: true,
+                        });
+                    }
+                }
+            }
+        }
+    }
     for runtime in &mut runtimes {
         runtime.selected = selected.as_ref().map(|path| path == Path::new(&runtime.executable)).unwrap_or(false);
     }
@@ -337,6 +373,113 @@ fn java_runtime(app: &AppHandle) -> Value {
         }).unwrap_or_else(|_| serde_json::json!({"available": false, "version": null})),
         None => serde_json::json!({"available": false, "executable": null, "version": null, "major": null}),
     }
+}
+
+async fn install_java_runtime_for_major(app: &AppHandle, major: u32) -> Result<Vec<JavaRuntime>, String> {
+    if let Some(runtime) = java_runtimes_for_app(app).into_iter().find(|runtime| runtime.major >= major) {
+        let path = selected_java_file(app)?;
+        let temp = path.with_extension("json.tmp");
+        let data = serde_json::to_vec_pretty(&serde_json::json!({"executable": runtime.executable}))
+            .map_err(|e| e.to_string())?;
+        fs::write(&temp, data).map_err(|e| format!("Cannot save Java selection: {e}"))?;
+        fs::rename(temp, path).map_err(|e| format!("Cannot finalize Java selection: {e}"))?;
+        return Ok(java_runtimes_for_app(app));
+    }
+
+    let architecture = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "aarch64",
+        other => return Err(format!("Automatic Java installation is not supported on Linux architecture {other}.")),
+    };
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(900))
+        .build().map_err(|e| format!("Cannot initialize Java download client: {e}"))?;
+    let metadata_url = format!(
+        "https://api.adoptium.net/v3/assets/latest/{major}/hotspot?architecture={architecture}&image_type=jre&os=linux&vendor=eclipse"
+    );
+    let assets: Value = client.get(&metadata_url).send().await
+        .map_err(|e| format!("Cannot find a Java {major} runtime: {e}"))?
+        .error_for_status().map_err(|e| format!("Java provider returned an error: {e}"))?
+        .json().await.map_err(|e| format!("Cannot parse Java download information: {e}"))?;
+    let package = assets.get(0).and_then(|asset| asset.get("binary"))
+        .and_then(|binary| binary.get("package")).ok_or("Java provider did not return a Linux JRE package")?;
+    let url = package.get("link").and_then(Value::as_str).ok_or("Java package URL is missing")?;
+    let checksum = package.get("checksum").and_then(Value::as_str).ok_or("Java package checksum is missing")?;
+    if !url.starts_with("https://") { return Err("Refusing a non-HTTPS Java download.".into()); }
+
+    let bytes = client.get(url).send().await
+        .map_err(|e| format!("Java download failed: {e}"))?
+        .error_for_status().map_err(|e| format!("Java download returned an HTTP error: {e}"))?
+        .bytes().await.map_err(|e| format!("Cannot read Java archive: {e}"))?;
+    let actual_checksum = format!("{:x}", sha2::Sha256::digest(&bytes));
+    if !actual_checksum.eq_ignore_ascii_case(checksum) {
+        return Err("Java archive SHA-256 verification failed; the archive was rejected.".into());
+    }
+
+    let mut runtime_root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    runtime_root.push("runtimes");
+    fs::create_dir_all(&runtime_root).map_err(|e| format!("Cannot create Java runtime directory: {e}"))?;
+    let staging = runtime_root.join(format!("java-{major}-extracting"));
+    let archive_path = runtime_root.join(format!("java-{major}.tar.gz.part"));
+    let destination = runtime_root.join(format!("java-{major}"));
+    if staging.exists() { fs::remove_dir_all(&staging).map_err(|e| e.to_string())?; }
+    fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+    fs::write(&archive_path, &bytes).map_err(|e| format!("Cannot save Java archive: {e}"))?;
+
+    let extraction = (|| -> Result<PathBuf, String> {
+        let file = fs::File::open(&archive_path).map_err(|e| e.to_string())?;
+        let decoder = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(decoder);
+        archive.unpack(&staging).map_err(|e| format!("Cannot extract Java runtime: {e}"))?;
+        let entries = fs::read_dir(&staging).map_err(|e| e.to_string())?;
+        for entry in entries.flatten() {
+            let candidate = entry.path().join("bin/java");
+            if candidate.is_file() { return Ok(entry.path()); }
+        }
+        let candidate = staging.join("bin/java");
+        if candidate.is_file() { return Ok(staging.clone()); }
+        Err("The downloaded Java archive does not contain bin/java.".into())
+    })();
+    let runtime_directory = match extraction {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = fs::remove_file(&archive_path);
+            let _ = fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+    };
+    if destination.exists() { fs::remove_dir_all(&destination).map_err(|e| e.to_string())?; }
+    fs::rename(&runtime_directory, &destination).map_err(|e| format!("Cannot install Java runtime: {e}"))?;
+    let _ = fs::remove_file(&archive_path);
+    let _ = fs::remove_dir_all(&staging);
+    let executable = destination.join("bin/java");
+    if !executable.is_file() { return Err("Java installation completed but bin/java is missing.".into()); }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&executable).map_err(|e| e.to_string())?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).map_err(|e| e.to_string())?;
+    }
+    let canonical = fs::canonicalize(&executable).map_err(|e| e.to_string())?;
+    let selection = selected_java_file(app)?;
+    let temp = selection.with_extension("json.tmp");
+    fs::write(&temp, serde_json::to_vec_pretty(&serde_json::json!({"executable": canonical}))
+        .map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    fs::rename(temp, selection).map_err(|e| e.to_string())?;
+    let runtimes = java_runtimes_for_app(app);
+    if !runtimes.iter().any(|runtime| runtime.major >= major && runtime.selected) {
+        return Err(format!("Java {major} was extracted, but could not be validated."));
+    }
+    Ok(runtimes)
+}
+
+#[tauri::command]
+async fn install_java_runtime(app: AppHandle, major_version: u32) -> Result<Vec<JavaRuntime>, String> {
+    if !(8..=99).contains(&major_version) { return Err("Invalid Java major version.".into()); }
+    install_java_runtime_for_major(&app, major_version).await
 }
 
 #[tauri::command]
@@ -359,6 +502,11 @@ fn select_java_runtime(app: AppHandle, executable: String) -> Result<Vec<JavaRun
 }
 
 #[tauri::command]
+fn get_multicore_plan(profile: String) -> Result<multicore::ThreadPlan, String> {
+    multicore::build_plan(&profile)
+}
+
+#[tauri::command]
 fn get_app_info() -> Value {
     serde_json::json!({
         "name": "ComfyCraft",
@@ -370,7 +518,7 @@ fn get_app_info() -> Value {
 
 #[tauri::command]
 async fn list_game_versions() -> Result<Vec<GameVersion>, String> {
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build().map_err(|e| e.to_string())?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).connect_timeout(std::time::Duration::from_secs(20)).timeout(std::time::Duration::from_secs(180)).build().map_err(|e| e.to_string())?;
     let manifest: VersionManifest = client.get(MANIFEST_URL).send().await
         .map_err(|e| format!("Cannot download Minecraft version manifest: {e}"))?
         .error_for_status().map_err(|e| format!("Minecraft version manifest request failed: {e}"))?
@@ -506,6 +654,10 @@ async fn install_game(app: AppHandle, instance_id: String) -> Result<InstallResu
             download_verified(&client, &task).await?;
         }
     }
+
+    let required_java_major = metadata.get("javaVersion").and_then(|value| value.get("majorVersion"))
+        .and_then(Value::as_u64).unwrap_or(25) as u32;
+    install_java_runtime_for_major(&app, required_java_major).await?;
 
     let marker = serde_json::json!({
         "version": instance.game_version,
@@ -760,7 +912,12 @@ fn inspect_launch_arguments(app: AppHandle, instance_id: String) -> Result<Value
             value
         }).collect()
     };
-    let jvm = expand(jvm, &mut unresolved);
+    let mut jvm = expand(jvm, &mut unresolved);
+    // Minecraft 26.3 reads max.bg.threads when sizing Util.backgroundExecutor.
+    // Remove any pre-existing value so ComfyCraft supplies exactly one setting.
+    jvm.retain(|argument| !argument.starts_with("-Dmax.bg.threads="));
+    let multicore_plan = multicore::build_plan("balanced")?;
+    jvm.extend(multicore_plan.jvm_arguments.iter().cloned());
     let game = expand(game, &mut unresolved);
     let required_java_major = metadata.get("javaVersion").and_then(|v| v.get("majorVersion"))
         .and_then(Value::as_u64).unwrap_or(25);
@@ -773,6 +930,7 @@ fn inspect_launch_arguments(app: AppHandle, instance_id: String) -> Result<Value
         "gameArgumentCount": game.len(),
         "jvmArguments": jvm,
         "gameArguments": game,
+        "multicore": multicore_plan,
         "unresolvedPlaceholders": unresolved,
         "authenticationRequired": true,
         "launchEnabled": false,
@@ -811,14 +969,14 @@ fn check_launch_readiness(app: AppHandle, instance_id: String) -> Result<Value, 
         }).count()
     }).unwrap_or(0);
     let checks = vec![
-        serde_json::json!({"id":"java","label":format!("Java {required_java} or newer"),"ok":java_ok,"detail":java.get("version").cloned().unwrap_or(Value::Null)}),
-        serde_json::json!({"id":"client","label":"Minecraft client","ok":client_ok}),
-        serde_json::json!({"id":"natives","label":"Linux native libraries","ok":natives_ok}),
-        serde_json::json!({"id":"assets","label":"Game assets","ok":assets_ok}),
-        serde_json::json!({"id":"libraries","label":"Runtime libraries","ok":classpath_count > 0,"count":classpath_count})
+        serde_json::json!({"id":"java","label":format!("Java {required_java} или новее"),"ok":java_ok,"detail":java.get("version").cloned().unwrap_or(Value::Null)}),
+        serde_json::json!({"id":"client","label":"Клиент Minecraft","ok":client_ok}),
+        serde_json::json!({"id":"natives","label":"Системные библиотеки Linux","ok":natives_ok}),
+        serde_json::json!({"id":"assets","label":"Игровые ресурсы","ok":assets_ok}),
+        serde_json::json!({"id":"libraries","label":"Библиотеки запуска","ok":classpath_count > 0,"count":classpath_count})
     ];
     let ready = checks.iter().all(|check| check.get("ok").and_then(Value::as_bool) == Some(true));
-    Ok(serde_json::json!({"ready":ready,"checks":checks,"authentication":"Ely.by sign-in is not implemented yet"}))
+    Ok(serde_json::json!({"ready":ready,"checks":checks,"authentication":"Авторизация Ely.by пока не реализована"}))
 }
 
 #[tauri::command]
@@ -1390,7 +1548,7 @@ fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_app_info, list_game_versions, list_java_runtimes, select_java_runtime, install_game, install_fabric, search_modrinth_mods, install_modrinth_mod, list_installed_mods, uninstall_modrinth_mod, check_mod_updates, search_modrinth_content, list_installed_content, install_modrinth_content, uninstall_modrinth_content, set_modrinth_content_enabled, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
+            get_app_info, get_multicore_plan, assets::verify_asset_cache, assets::repair_asset_cache, list_game_versions, list_java_runtimes, install_java_runtime, select_java_runtime, install_game, install_fabric, search_modrinth_mods, install_modrinth_mod, list_installed_mods, uninstall_modrinth_mod, check_mod_updates, search_modrinth_content, list_installed_content, install_modrinth_content, uninstall_modrinth_content, set_modrinth_content_enabled, get_runtime_info, inspect_launch_arguments, check_launch_readiness, is_game_installed,
             list_instances, create_instance, rename_instance, delete_instance
         ])
         .run(tauri::generate_context!())

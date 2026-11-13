@@ -1,0 +1,16 @@
+name = "comfycraft-ely-auth"
+main = "src/index.ts"
+compatibility_date = "2026-11-08"
+
+[[durable_objects.bindings]]
+name = "OAUTH_SESSIONS"
+class_name = "OAuthSession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OAuthSession"]
+
+[vars]
+ELY_REDIRECT_URI = "https://comfycraft-ely-auth.sartywerty15664.workers.dev/v1/auth/callback"
+# Set ELY_CLIENT_ID as a non-secret Worker variable after creating the Ely.by application.
+# ELY_CLIENT_SECRET must be stored as a Worker secret, never committed.
